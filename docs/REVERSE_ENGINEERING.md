@@ -42,6 +42,7 @@ The user's own `~/.config/btop/` was never written to. Every observation run use
 - **Process CPU %**: process tick delta over wall-clock elapsed time × `CLK_TCK`, expressed per core, divided by the core count unless per-core mode (`c`) is on. Verified against btop with a busy loop.
 - **Memory used**: `MemTotal − MemAvailable`. Cached: `Cached + SReclaimable`.
 - **Network rate**: counter delta over elapsed time for the chosen interface. The default interface is the one carrying the default route in `/proc/net/route`.
+- **`cpu lazy` sort**: btop sorts by lifetime CPU (`cpu_c` = CPU ticks / (uptime·CLK_TCK − start ticks)), then pushes processes above 30% CPU to the front (10% when none of the top six is above 30%), at most 10 moves per refresh (`proc_sorter`, `src/btop_shared.cpp`). `cpu direct` sorts by the instantaneous CPU %. The lazy rule was checked against a compiled copy of the btop logic on 3000 random inputs.
 - **Auto-scaled network graphs**: the top of the scale starts at 10 KiB/s and steps by powers of ten to cover the recent peak. Fixed mode uses `net_download` / `net_upload` in mebibits.
 - **Sizes**: binary units by default, three significant characters (`13.0 GiB`, `238 GiB`, `1.78 TiB`), `0 Byte` for zero.
 
@@ -77,6 +78,7 @@ Checks then run in this order: UTF-8 locale (unless `--utf-force`), then a tty. 
 
 - The minimum size is 80x24. Smaller terminals show a centred `Terminal size too small:` message with the actual and required sizes.
 - Geometry (btop `Draw::calcSizes`, GPU build, with N GPUs and H rows): CPU box height `max(8, ceil(H·32/100)) + N` when it fits, else without the `+ N`. MEM and NET share the left column with width `round(W·45/100)`; MEM height is `ceil(H·68/100) − cpu_h`, NET takes the remaining rows. PROC is the right-hand column.
+- Position options: `cpu_bottom` puts CPU on the last rows (its title and the menu/preset/clock buttons move to the bottom border), `proc_left` moves PROC to the left and MEM/NET to the right, and `mem_below_net` puts NET above MEM. Hidden boxes release their space: with only CPU shown it takes all rows, and hiding MEM lets NET fill the left column.
 - The CPU sub-box, per-core columns, GPU columns and brief rows follow `Cpu::draw`: core columns use widths `(8+6T)`, `(15+6T)` or `(21+12T)` per core depending on how many fit, and per-core rows are skipped when the sub-box is narrow (see files/src-notes/box_rules.md).
 - Frames use truecolor SGR sequences (`38;2;R;G;B`) when `truecolor` is on, otherwise 256-colour sequences.
 - btop wraps frames in synchronized-output sequences (`?2026`) and enters the alternate screen (`?1049`). pybtop enters the alternate screen and restores the terminal on exit.

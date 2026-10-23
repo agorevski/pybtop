@@ -670,9 +670,10 @@ class App:
             ov.draw_too_small(canvas, pal, width, height, layout.MIN_WIDTH, layout.MIN_HEIGHT)
             return canvas.render(self.low_color)
 
-        rects = layout.compute(width, height, len(self.gpus))
-        visible = {"cpu": "cpu", "mem": "mem", "net": "net", "proc": "proc"}
-        rects = {name: rect for name, rect in rects.items() if name in self.shown and name in visible}
+        rects = layout.compute(
+            width, height, len(self.gpus), self.shown,
+            cpu_bottom=self.cpu_bottom, proc_left=self.proc_left, mem_below_net=self.mem_below_net,
+        )
         if not rects:
             ov.draw_prompt(canvas, pal, "No boxes shown!", [
                 "1 | Show CPU box", "2 | Show MEM box", "3 | Show NET box", "4 | Show PROC box",
@@ -683,13 +684,13 @@ class App:
         self.proc_page_rows = max(1, rects["proc"].inner.height - 1) if "proc" in rects else 10
         pen = Pen(canvas)
         if "cpu" in rects:
-            btop_cpu.draw_cpu(self, pen, width, rects["cpu"].height)
+            btop_cpu.draw_cpu(self, pen, width, rects["cpu"].height, rects["cpu"].row + 1)
         if "mem" in rects:
             mem = rects["mem"]
-            btop_boxes.draw_mem(self, pen, mem.width, mem.height, mem.row + 1)
+            btop_boxes.draw_mem(self, pen, mem.width, mem.height, mem.row + 1, mem.col + 1)
         if "net" in rects:
             net = rects["net"]
-            btop_boxes.draw_net(self, pen, net.width, net.height, net.row + 1)
+            btop_boxes.draw_net(self, pen, net.width, net.height, net.row + 1, net.col + 1)
         if "proc" in rects:
             proc = rects["proc"]
             btop_boxes.draw_proc(self, pen, proc.width, proc.height, proc.col + 1, proc.row + 1)
