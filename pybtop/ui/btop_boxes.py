@@ -10,6 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ..collectors.processes import STATE_NAMES
 from ..fmt import floating_humanizer
 from .pen import (
     DIV_DOWN,
@@ -18,9 +19,13 @@ from .pen import (
     DIV_UP,
     GRAPH_BG,
     H_LINE,
+    SUPERSCRIPT,
+    TITLE_LEFT,
+    TITLE_RIGHT,
     V_LINE,
     Pen,
     c_round,
+    cjust,
     create_box,
     graph,
     ljust,
@@ -96,12 +101,14 @@ def draw_mem(app: "App", pen: Pen, width: int, height: int, y: int, x: int) -> N
     title_x = g.divider + 2 if app.show_disks else x + width - 9
     pen.to(y, title_x)
     pen.write("┐", fg=box)
+    app.map_mouse("d", y, pen.x, 1, 5)
     pen.write("d", fg=pal.hi_fg, bold=True)
     pen.write("isks", fg=pal.title, bold=False)
     pen.write("┌", fg=box)
     if app.show_disks:
         pen.to(y, x + width - 6)
         pen.write("┐", fg=box)
+        app.map_mouse("i", y, pen.x, 1, 2)
         pen.write("io", fg=pal.hi_fg, bold=True)
         pen.write("┌", fg=box)
 
@@ -290,12 +297,15 @@ def draw_net(app: "App", pen: Pen, width: int, height: int, y: int, x: int) -> N
     i_size = min(len(iface), 10)
     pen.to(y, x + width - i_size - 9)
     pen.write("┐", fg=box)
+    app.map_mouse("b", y, pen.x, 1, 3)
     pen.write("<b ", fg=pal.hi_fg, bold=True)
     pen.write(uresize(iface, 10), fg=pal.title, bold=False)
+    app.map_mouse("n", y, pen.x, 1, 3)
     pen.write(" n>", fg=pal.hi_fg, bold=False)
     pen.write("┌", fg=box)
     pen.to(y, x + width - i_size - 15)
     pen.write("┐", fg=box)
+    app.map_mouse("z", y, pen.x, 1, 4)
     pen.write("z", fg=pal.hi_fg, bold=False)
     pen.write("ero", fg=pal.title, bold=False)
     pen.write("┌", fg=box)
@@ -308,12 +318,14 @@ def draw_net(app: "App", pen: Pen, width: int, height: int, y: int, x: int) -> N
     if width - i_size - 20 > 6:
         pen.to(y, x + width - i_size - 21)
         pen.write("┐", fg=box)
+        app.map_mouse("a", y, pen.x, 1, 4)
         pen.write("a", fg=pal.hi_fg, bold=app.cfg.get_bool("net_auto"))
         pen.write("uto", fg=pal.title, bold=False)
         pen.write("┌", fg=box)
     if width - i_size - 20 > 13:
         pen.to(y, x + width - i_size - 27)
         pen.write("┐", fg=box)
+        app.map_mouse("y", y, pen.x, 1, 4)
         pen.write("s", fg=pal.title, bold=app.cfg.get_bool("net_sync"))
         pen.write("y", fg=pal.hi_fg, bold=False)
         pen.write("nc", fg=pal.title, bold=False)
@@ -363,50 +375,28 @@ def draw_net(app: "App", pen: Pen, width: int, height: int, y: int, x: int) -> N
 # ---------- PROC ------------------------------------------------------------------------------
 
 
+DETAIL_ROWS = 8  # rows the detail panel takes at the top of the PROC box (btop's Proc::y + 8)
+
+
 def draw_proc(app: "App", pen: Pen, width: int, height: int, x: int, y: int) -> None:
     pal = app.palette
     box = pal.box("proc")
+    detailed = app.detail is not None
+    top = y + DETAIL_ROWS if detailed else y  # list section: its control row, then the column labels
+    list_h = height - DETAIL_ROWS if detailed else height
     user_size = 5 if width < 75 else 10
     thread_size = -1 if width < 75 else 4
     prog_size = 16 if width > 70 else (8 if width > 55 else width - user_size - thread_size - 33)
     cmd_size = width - prog_size - user_size - thread_size - 33 if width > 55 else -1
-    select_max = height - 3
-    create_box(pen, x, y, width, height, box, True, "proc", "", 4,
+    select_max = list_h - 3
+    app.proc_area = (x, y, width, height, top, list_h)
+    create_box(pen, x, y, width, height, box, True, "" if detailed else "proc", "", 0 if detailed else 4,
                rounded=app.cfg.get_bool("rounded_corners"), title_color=pal.title, hi_color=pal.hi_fg, bg=pal.bg)
+    if detailed:
+        _detail_panel(app, pen, x, y, width)
+    _list_controls(app, pen, x, top, width)
 
-    sort_len = len(app.proc_sort)
-    sort_pos = x + width - sort_len - 8
-    pen.to(y, x + 9)
-    pen.write("┐", fg=box)
-    pen.write("filter" if not app.filter_text else f" {app.filter_text}", fg=pal.title, bold=True)
-    pen.write("┌", fg=box)
-    if width > 55 + sort_len:
-        pen.to(y, sort_pos - 25)
-        pen.write("┐", fg=box)
-        pen.write("per-", fg=pal.title, bold=True)
-        pen.write("c", fg=pal.hi_fg, bold=True)
-        pen.write("ore", fg=pal.title, bold=True)
-        pen.write("┌", fg=box)
-    if width > 45 + sort_len:
-        pen.to(y, sort_pos - 15)
-        pen.write("┐", fg=box)
-        pen.write("r", fg=pal.hi_fg, bold=True)
-        pen.write("everse", fg=pal.title, bold=True)
-        pen.write("┌", fg=box)
-    if width > 35 + sort_len:
-        pen.to(y, sort_pos - 6)
-        pen.write("┐", fg=box)
-        pen.write("tre", fg=pal.title, bold=True)
-        pen.write("e", fg=pal.hi_fg, bold=True)
-        pen.write("┌", fg=box)
-    pen.to(y, sort_pos)
-    pen.write("┐", fg=box)
-    pen.write("< ", fg=pal.hi_fg, bold=True)
-    pen.write(app.proc_sort, fg=pal.title, bold=True)
-    pen.write(" >", fg=pal.hi_fg, bold=True)
-    pen.write("┌", fg=box)
-
-    pen.to(y + 1, x + 1)
+    pen.to(top + 1, x + 1)
     pen.write(rjust("Pid:", 8) + " ", fg=pal.title, bold=True)
     pen.write(ljust("Program:", prog_size) + " ", fg=pal.title, bold=True)
     if cmd_size > 0:
@@ -422,14 +412,14 @@ def draw_proc(app: "App", pen: Pen, width: int, height: int, x: int, y: int) -> 
 
     visible = app.visible_process_rows(select_max)
     for lc, (proc, depth) in enumerate(visible):
-        row = y + 2 + lc
+        row = top + 2 + lc
         selected = app.selected_index == app.proc_scroll + lc
         bg = pal.selected_bg if selected else pal.bg
         fg = pal.selected_fg if selected else pal.main_fg
         pen.style(bg=bg)
         pen.to(row, x + 1)
         pen.write(rjust(str(proc.pid), 8) + " ", fg=fg, bold=selected)
-        name = ("  " * depth + proc.name) if app.proc_tree else proc.name
+        name = proc.prefix + proc.name if app.proc_tree else proc.name
         pen.write(ljust(name, prog_size) + " ", fg=fg, bold=selected)
         if cmd_size > 0:
             pen.write(ljust(proc.command or f"[{proc.name}]", cmd_size), fg=fg, bold=selected)
@@ -448,9 +438,72 @@ def draw_proc(app: "App", pen: Pen, width: int, height: int, x: int, y: int) -> 
         pen.write(rjust(_cpu_text(proc.cpu_percent), 4) + "  ", fg=fg, bold=selected)
     pen.style(bg=pal.bg)
     if len(app.procs) > select_max:
-        _scrollbar(app, pen, x, y, width, height, select_max)
+        _scrollbar(app, pen, x, top, width, list_h, select_max)
 
-    fy = y + height - 1
+    _bottom_controls(app, pen, x, y + height - 1, width)
+
+
+def _list_controls(app: "App", pen: Pen, x: int, y: int, width: int) -> None:
+    """Filter, per-core, reverse, tree and sort buttons on the list's top row (Proc::draw, btop L1659-1693)."""
+    pal = app.palette
+    box = pal.box("proc")
+    pen.to(y, x + 9)
+    pen.write("┐", fg=box)
+    filter_start = pen.x
+    pen.write("f", fg=pal.hi_fg, bold=True)
+    if app.filter_text:
+        pen.write(f" {app.filter_text}", fg=pal.title, bold=True)
+        app.map_mouse("f", y, filter_start, 1, len(app.filter_text) + 2)
+        pen.write(" ", fg=pal.hi_fg)
+        app.map_mouse("delete", y, pen.x, 1, 3)
+        pen.write("del", fg=pal.hi_fg)
+    else:
+        pen.write("ilter", fg=pal.title, bold=True)
+        app.map_mouse("f", y, filter_start, 1, 6)
+    pen.write("┌", fg=box)
+
+    sort_len = len(app.proc_sort)
+    sort_pos = x + width - sort_len - 8
+    if width > 55 + sort_len:
+        pen.to(y, sort_pos - 25)
+        pen.write("┐", fg=box)
+        start = pen.x
+        pen.write("per-", fg=pal.title, bold=True)
+        pen.write("c", fg=pal.hi_fg, bold=True)
+        pen.write("ore", fg=pal.title, bold=True)
+        app.map_mouse("c", y, start, 1, 8)
+        pen.write("┌", fg=box)
+    if width > 45 + sort_len:
+        pen.to(y, sort_pos - 15)
+        pen.write("┐", fg=box)
+        start = pen.x
+        pen.write("r", fg=pal.hi_fg, bold=True)
+        pen.write("everse", fg=pal.title, bold=True)
+        app.map_mouse("r", y, start, 1, 7)
+        pen.write("┌", fg=box)
+    if width > 35 + sort_len:
+        pen.to(y, sort_pos - 6)
+        pen.write("┐", fg=box)
+        start = pen.x
+        pen.write("tre", fg=pal.title, bold=True)
+        pen.write("e", fg=pal.hi_fg, bold=True)
+        app.map_mouse("e", y, start, 1, 4)
+        pen.write("┌", fg=box)
+    pen.to(y, sort_pos)
+    pen.write("┐", fg=box)
+    app.map_mouse("left", y, pen.x, 1, 2)
+    pen.write("< ", fg=pal.hi_fg, bold=True)
+    pen.write(app.proc_sort, fg=pal.title, bold=True)
+    app.map_mouse("right", y, pen.x, 1, 2)
+    pen.write(" >", fg=pal.hi_fg, bold=True)
+    pen.write("┌", fg=box)
+
+
+def _bottom_controls(app: "App", pen: Pen, x: int, fy: int, width: int) -> None:
+    """Select, info, terminate, kill and signals buttons on the bottom border, plus the position counter."""
+    pal = app.palette
+    box = pal.box("proc")
+    has_procs = bool(app.procs)
     pen.to(fy, x + 1)
     pen.write(TITLE_LEFT_DOWN, fg=box)
     pen.write(UP_ARROW, fg=pal.hi_fg, bold=True)
@@ -458,22 +511,34 @@ def draw_proc(app: "App", pen: Pen, width: int, height: int, x: int, y: int) -> 
     pen.write(DOWN_ARROW, fg=pal.hi_fg, bold=True)
     pen.write(TITLE_RIGHT_DOWN, fg=box)
     pen.write(TITLE_LEFT_DOWN, fg=box)
+    start = pen.x
     pen.write("info ", fg=pal.title, bold=False)
     pen.write(ENTER, fg=pal.hi_fg, bold=True)
+    if has_procs:
+        app.map_mouse("enter", fy, start, 1, 6)
     pen.write(TITLE_RIGHT_DOWN, fg=box)
     if width > 60:
         pen.write(TITLE_LEFT_DOWN, fg=box)
+        start = pen.x
         pen.write("t", fg=pal.hi_fg, bold=True)
         pen.write("erminate", fg=pal.title, bold=False)
+        if has_procs:
+            app.map_mouse("t", fy, start, 1, 9)
         pen.write(TITLE_RIGHT_DOWN, fg=box)
     if width > 55:
         pen.write(TITLE_LEFT_DOWN, fg=box)
+        start = pen.x
         pen.write("k", fg=pal.hi_fg, bold=True)
         pen.write("ill", fg=pal.title, bold=False)
+        if has_procs:
+            app.map_mouse("k", fy, start, 1, 4)
         pen.write(TITLE_RIGHT_DOWN, fg=box)
     pen.write(TITLE_LEFT_DOWN, fg=box)
+    start = pen.x
     pen.write("s", fg=pal.hi_fg, bold=True)
     pen.write("ignals", fg=pal.title, bold=False)
+    if has_procs:
+        app.map_mouse("s", fy, start, 1, 7)
     pen.write(TITLE_RIGHT_DOWN, fg=box)
 
     location = f"{app.selected_index if app.procs else 0}/{len(app.procs)}"
@@ -482,6 +547,147 @@ def draw_proc(app: "App", pen: Pen, width: int, height: int, x: int, y: int) -> 
     pen.write(TITLE_LEFT_DOWN, fg=box)
     pen.write(location, fg=pal.title, bold=True)
     pen.write(TITLE_RIGHT_DOWN, fg=box)
+
+
+def _detail_panel(app: "App", pen: Pen, x: int, y: int, width: int) -> None:
+    """Process detail panel in the top DETAIL_ROWS rows of the PROC box (Proc::draw, show_detailed, L1566-1770).
+
+    Layout: CPU graph on the left, info grid and command on the right, memory line below the grid.
+    """
+    pal = app.palette
+    box = pal.box("proc")
+    det = app.detail
+    info = det.info
+    alive = det.alive
+    dgraph_width = max(width // 3, width - 121)
+    d_width = width - dgraph_width - 1
+    d_x = x + dgraph_width + 1
+    top = y + DETAIL_ROWS
+    item_fit = max(1, (d_width - 2) // 10)
+    item_width = (d_width - 2) // min(item_fit, 8)
+    hi_color = pal.hi_fg if alive else pal.inactive_fg
+    t_color = pal.title if alive else pal.inactive_fg
+
+    pen.to(top, x)
+    pen.write(DIV_LEFT, fg=box)
+    pen.write(H_LINE, fg=box)
+    pen.write(TITLE_LEFT, fg=box)
+    pen.write(SUPERSCRIPT[4], fg=pal.hi_fg, bold=True)
+    pen.write("proc", fg=pal.title, bold=True)
+    pen.write(TITLE_RIGHT, fg=box)
+    pen.write(H_LINE * (width - 10), fg=box)
+    pen.write(DIV_RIGHT, fg=box)
+
+    pid_text = str(info.pid)
+    pen.to(y, x + 2)
+    pen.write(TITLE_LEFT, fg=box)
+    pen.write(pid_text, fg=pal.title, bold=True)
+    pen.write(TITLE_RIGHT, fg=box)
+    pen.write(TITLE_LEFT, fg=box)
+    pen.write(uresize(info.name, dgraph_width - len(pid_text) - 7), fg=pal.title, bold=True)
+    pen.write(TITLE_RIGHT, fg=box)
+
+    pen.to(y, d_x - 1)
+    pen.write(DIV_UP, fg=box)
+    pen.to(top, d_x - 1)
+    pen.write(DIV_DOWN, fg=pal.div_line)
+    for row in range(1, DETAIL_ROWS):
+        pen.to(y + row, d_x - 1)
+        pen.write(V_LINE, fg=pal.div_line)
+
+    pen.to(y, d_x + 1)
+    if width > 55:
+        pen.write(TITLE_LEFT, fg=box)
+        start = pen.x
+        pen.write("t", fg=hi_color, bold=True)
+        pen.write("erminate", fg=t_color)
+        if alive:
+            app.map_mouse("t", y, start, 1, 9)
+        pen.write(TITLE_RIGHT, fg=box)
+    pen.write(TITLE_LEFT, fg=box)
+    start = pen.x
+    pen.write("k", fg=hi_color, bold=True)
+    pen.write("ill", fg=t_color)
+    if alive:
+        app.map_mouse("k", y, start, 1, 4)
+    pen.write(TITLE_RIGHT, fg=box)
+    pen.write(TITLE_LEFT, fg=box)
+    start = pen.x
+    pen.write("s", fg=hi_color, bold=True)
+    pen.write("ignals", fg=t_color)
+    if alive:
+        app.map_mouse("s", y, start, 1, 7)
+    pen.write(TITLE_RIGHT, fg=box)
+    pen.to(y, d_x + d_width - 10)
+    pen.write(TITLE_LEFT, fg=box)
+    start = pen.x
+    pen.write("hide ", fg=t_color, bold=True)
+    app.map_mouse("enter", y, start, 1, 6)
+    pen.write(ENTER, fg=hi_color, bold=True)
+    pen.write(TITLE_RIGHT, fg=box)
+
+    status = STATE_NAMES.get(info.state[:1], "Unknown") if alive else "Dead"
+    labels = [("Status:", None), ("Elapsed:", None)]
+    if item_fit >= 3:
+        labels.append(("IO/R:", None))
+    if item_fit >= 4:
+        labels.append(("IO/W:", None))
+    if item_fit >= 5:
+        labels.append(("Parent:", None))
+    if item_fit >= 6:
+        labels.append(("User:", None))
+    if item_fit >= 7:
+        labels.append(("Threads:", None))
+    if item_fit >= 8:
+        labels.append(("Nice:", None))
+    pen.to(y + 1, d_x + 1)
+    pen.write("".join(cjust(label, item_width) for label, _ in labels), fg=pal.title, bold=True)
+
+    io_read = floating_humanizer(det.io[0]) if det.io else ""
+    io_write = floating_humanizer(det.io[1]) if det.io else ""
+    running = status == "Running" and alive
+    stat_color = pal.inactive_fg if not alive else (app.theme.color("proc_misc") if running else pal.main_fg)
+    values = [status, det.elapsed, io_read, io_write, det.parent, info.user, str(info.threads), str(info.nice)]
+    pen.to(y + 2, d_x + 1)
+    pen.write(cjust(values[0], item_width), fg=stat_color)
+    pen.write("".join(cjust(value, item_width) for value in values[1 : len(labels)]), fg=pal.main_fg)
+
+    cpu_text = _pct_text(info.cpu_percent) + "%" if alive else ""
+    pen.to(y + 1, x + 1)
+    graph(pen, list(det.cpu_hist), dgraph_width - 1, DETAIL_ROWS - 1, pal.gradients["cpu"], no_zero=True)
+    pen.to(y + 1, x + 1)
+    pen.write(cpu_text, fg=pal.title, bold=True)
+    for row, label in enumerate("CPU"):
+        pen.to(y + 3 + row, x + 1)
+        pen.write(label, fg=pal.main_fg)
+
+    total = app.mem.total if app.mem is not None and app.mem.total else 1
+    mem_text = ("Memory: " if item_fit > 4 else "M:") + _pct_text(100.0 * info.rss_bytes / total) + "% "
+    mem_w = d_width // 3
+    pen.to(y + 4, d_x + 1)
+    pen.write(rjust(mem_text, mem_w - 2), fg=pal.title, bold=True)
+    graph_x = pen.x
+    pen.write(GRAPH_BG * mem_w, fg=pal.inactive_fg)
+    pen.to(y + 4, graph_x)
+    graph(pen, list(det.mem_hist), mem_w, 1, [app.theme.color("proc_misc")], no_zero=False)
+    pen.write(" ", fg=pal.main_fg)
+    pen.write(floating_humanizer(info.rss_bytes), fg=pal.title, bold=True)
+
+    command = info.command or f"[{info.name}]"
+    chunk = d_width - 5
+    lines = [command[i * chunk : (i + 1) * chunk] for i in range(min(3, math.ceil(len(command) / chunk)))]
+    for row, label in enumerate("CMD"):
+        pen.to(y + 5 + row, d_x + 1)
+        pen.write(label, fg=pal.main_fg)
+    for row, line in enumerate(lines):
+        pen.to(y + 5 + (1 if len(lines) == 1 else row), d_x + 3)
+        pen.write(cjust(line, chunk), fg=pal.main_fg)
+
+
+def _pct_text(pct: float) -> str:
+    """btop's detail percentage: three characters below 10 or from 100 up, otherwise four."""
+    text = f"{pct:f}"
+    return text[:3] if pct < 10 or pct >= 100 else text[:4]
 
 
 def _threads_text(threads: int) -> str:

@@ -105,6 +105,21 @@ def test_tree_order_nests_children_under_parents():
     assert ordered == [("init", 0), ("child", 1), ("grandchild", 2)]
 
 
+def test_tree_collapse_hides_subtree_and_adds_its_usage_to_the_parent_row():
+    base = dict(state="S", threads=1, utime=0, stime=0, start_ticks=0, rss_bytes=0)
+    procs = [
+        processes.ProcessInfo(pid=1, ppid=0, name="init", cpu_percent=1.0, **base),
+        processes.ProcessInfo(pid=2, ppid=1, name="child", cpu_percent=5.0, **base),
+        processes.ProcessInfo(pid=3, ppid=2, name="grandchild", cpu_percent=7.0, **base),
+    ]
+    shown = processes.tree_order(procs, collapsed={2})
+    assert [(p.name, depth) for p, depth in shown] == [("init", 0), ("child", 1)]
+    child = shown[1][0]
+    assert child.cpu_percent == 12.0
+    assert child.prefix == " │ [+]─"
+    assert procs[1].cpu_percent == 5.0  # the collapsed row is a copy; the sampled process keeps its own value
+
+
 def test_theme_parser_takes_first_quoted_value_and_ignores_trailing_text():
     text = 'theme[main_bg]="#ff0000" #00ff00"\n# comment\ntheme[title]="#ABC"\n'
     assert parse_theme_text(text) == {"main_bg": "#ff0000", "title": "#ABC"}
@@ -116,7 +131,6 @@ def test_config_values_keep_btop_types():
     assert parse_value("False") is False
 
 
-<<<<<<< HEAD
 def test_config_save_keeps_comments_unknown_keys_and_unchanged_lines():
     old = [
         "#? Config file for btop v. 1.3.0",

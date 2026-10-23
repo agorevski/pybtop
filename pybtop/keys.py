@@ -1,6 +1,8 @@
-"""Terminal input decoding: escape sequences, control keys and printable characters."""
+"""Terminal input decoding: escape sequences, control keys, printable characters and SGR mouse reports."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 # CSI / SS3 sequences seen from xterm-compatible terminals.
 _SEQUENCES = {
@@ -24,21 +26,48 @@ _CONTROL = {
     "\x03": "ctrl+c", "\x1a": "ctrl+z",
 }
 
+# Mouse button codes from SGR (mode 1006) reports that pybtop acts on, as btop 1.3.0 does.
+_MOUSE_CLICK, _MOUSE_WHEEL_UP, _MOUSE_WHEEL_DOWN = 0, 64, 65
+
+
+@dataclass(frozen=True)
+class MouseEvent:
+    """A mouse report. `kind` is 'click' (left press), 'scroll_up' or 'scroll_down'; col/row are 1-based."""
+
+    kind: str
+    col: int
+    row: int
+
 
 class KeyDecoder:
-    """Turns raw stdin bytes into key names. An incomplete escape sequence is held until `flush`."""
+    """Turns raw stdin bytes into key names and MouseEvents.
+
+    An incomplete escape sequence is held until more bytes arrive or `flush` is called.
+    """
 
     def __init__(self) -> None:
         self._pending = ""
 
-    def feed(self, data: bytes) -> list[str]:
+    def feed(self, data: bytes) -> list[str | MouseEvent]:
         self._pending += data.decode("utf-8", errors="replace")
-        keys: list[str] = []
+        keys: list[str | MouseEvent] = []
         buf = self._pending
         i = 0
         while i < len(buf):
             ch = buf[i]
             if ch == "\x1b":
+                if buf.startswith("\x1b[<", i):
+                    stop = _sgr_stop(buf, i + 3)
+                    if stop is None:
+                        break  # the SGR report is still arriving
+                    if buf[stop] in "Mm":
+                        event = _mouse_event(buf[i + 3 : stop], buf[stop])
+                        if event is not None:
+                            keys.append(event)
+                        i = stop + 1
+                    else:
+                        i = stop  # malformed report: drop it, keep the byte that ended it
+                    continue
                 match = next((seq for seq in _SEQUENCES if buf.startswith(seq, i)), None)
                 if match is not None:
                     keys.append(_SEQUENCES[match])
@@ -57,16 +86,45 @@ class KeyDecoder:
         self._pending = buf[i:]
         return keys
 
-    def flush(self) -> list[str]:
-        """Resolve a lone ESC (or unknown sequence) after the input timeout."""
+    def flush(self) -> list[str | MouseEvent]:
+        """Resolve a lone ESC after the input timeout. A partial CSI/SS3 sequence is dropped, not replayed as keys."""
         pending, self._pending = self._pending, ""
         if not pending:
             return []
         if pending == "\x1b":
             return ["esc"]
+        if pending.startswith("\x1b["):
+            return []
         if pending.startswith("\x1b"):
             return ["esc"] + [_CONTROL.get(c, c) for c in pending[1:]]
         return [_CONTROL.get(c, c) for c in pending]
+
+
+def _sgr_stop(buf: str, start: int) -> int | None:
+    """Index of the M/m that ends an SGR mouse report, or of the first byte that cannot belong to one.
+
+    Returns None while the report is still incomplete.
+    """
+    for j in range(start, len(buf)):
+        if buf[j] in "Mm":
+            return j
+        if not ("0" <= buf[j] <= "9" or buf[j] == ";"):
+            return j
+    return None
+
+
+def _mouse_event(params: str, final: str) -> MouseEvent | None:
+    """Decode the body of an SGR report ('button;col;row' + 'M' press / 'm' release)."""
+    try:
+        button, col, row = (int(part) for part in params.split(";"))
+    except ValueError:
+        return None
+    if final != "M":
+        return None  # releases are ignored, as in btop
+    kinds = {_MOUSE_CLICK: "click", _MOUSE_WHEEL_UP: "scroll_up", _MOUSE_WHEEL_DOWN: "scroll_down"}
+    if button not in kinds:
+        return None
+    return MouseEvent(kinds[button], col, row)
 
 
 def _csi_end(buf: str, start: int) -> int:
