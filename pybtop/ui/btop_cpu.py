@@ -87,6 +87,7 @@ def draw_cpu(app: "App", pen: Pen, width: int, cpu_h: int) -> CpuGeo:
     create_box(pen, x, y, w, h, box, True, "cpu", "", 1,
                rounded=app.cfg.get_bool("rounded_corners"), title_color=pal.title, hi_color=pal.hi_fg, bg=pal.bg)
     _header_buttons(app, pen, geo)
+    _draw_battery(app, pen, width)
     _draw_meter_box(app, pen, geo)
 
     if geo.mid_line:
@@ -147,6 +148,34 @@ def _header_buttons(app: "App", pen: Pen, geo: CpuGeo) -> None:
     pen.write("┐", fg=box)
     pen.write(app.clock_text, fg=pal.title, bold=True)
     pen.write("┌", fg=box)
+
+
+BATTERY_SYMBOLS = {"charging": "▲", "discharging": "▼", "full": "■", "unknown": "○"}
+
+
+def _draw_battery(app: "App", pen: Pen, width: int) -> None:
+    """Battery title on the CPU box's top border (Cpu::draw, btop_draw.cpp L705-744), right of the clock."""
+    bat = app.battery
+    if bat is None:
+        return
+    pal = app.palette
+    time_text = ""
+    if bat.seconds > 0:
+        hours, minutes = divmod(bat.seconds // 60, 60)
+        time_text = f"{hours:02d}:{minutes:02d}"
+    wide = width >= 100
+    pct_text = f"{bat.percent}%"
+    cur_len = (11 if wide else 0) + len(time_text) + len(pct_text) + len(str(app.update_ms))
+    pen.to(1, width - cur_len - 17)
+    box = pal.box("cpu")
+    pen.write(DIV_RIGHT, fg=box)
+    pen.write("BAT" + BATTERY_SYMBOLS.get(bat.status, BATTERY_SYMBOLS["unknown"]) + " " + pct_text,
+              fg=pal.title, bold=True)
+    if wide:
+        pen.write(" ", fg=pal.title, bold=False)
+        meter(pen, bat.percent, 10, pal.gradients["cpu"], pal.meter_bg, invert=True)
+    pen.write(" " + time_text, fg=pal.title, bold=True)
+    pen.write(DIV_LEFT, fg=box, bold=False)
 
 
 def _uptime_string(app: "App") -> str:

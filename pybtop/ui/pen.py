@@ -174,15 +174,17 @@ def create_box(
         pen.write(TITLE_RIGHT_DOWN, fg=line_color, bold=False)
 
 
-def meter(pen: Pen, value: float, width: int, gradient: list[tuple[int, int, int]], meter_bg: Color) -> None:
-    """Port of btop Meter: `width` cells of ■; filled part coloured by gradient at each cell's percent."""
+def meter(
+    pen: Pen, value: float, width: int, gradient: list[tuple[int, int, int]], meter_bg: Color, invert: bool = False
+) -> None:
+    """Port of btop Meter: `width` cells of ■, coloured by the gradient at each cell's percent (inverted: 100 - percent)."""
     if width < 1:
         return
     value = max(0.0, min(100.0, value))
     for i in range(1, width + 1):
         y = c_round(i * 100.0 / width)
         if value >= y:
-            pen.write(METER, fg=gradient_color(gradient, y))
+            pen.write(METER, fg=gradient_color(gradient, 100 - y if invert else y))
         else:
             pen.write(METER * (width + 1 - i), fg=meter_bg)
             break

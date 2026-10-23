@@ -9,6 +9,7 @@ PROC_MEMINFO = "/proc/meminfo"
 PROC_MOUNTS = "/proc/self/mounts"
 ETC_MTAB = "/etc/mtab"
 SYS_BLOCK = "/sys/block"
+PROC_ARCSTATS = "/proc/spl/kstat/zfs/arcstats"
 
 # Pseudo or virtual filesystems that are never reported as disks.
 SKIP_FSTYPES = {
@@ -44,7 +45,19 @@ class MemoryStats:
         return 100.0 * self.swap_used / self.swap_total if self.swap_total else 0.0
 
 
-def parse_meminfo(text: str) -> MemoryStats:
+def parse_arcstats(text: str) -> tuple[int, int] | None:
+    """(ARC size, c_min) in bytes from /proc/spl/kstat/zfs/arcstats, or None when absent."""
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        fields = line.split()
+        if len(fields) == 3 and fields[0] in ("size", "c_min") and fields[2].isdigit():
+            values[fields[0]] = int(fields[2])
+    if "size" not in values or "c_min" not in values:
+        return None
+    return values["size"], values["c_min"]
+
+
+def parse_meminfo(text: str, arcstats: tuple[int, int] | None = None) -> MemoryStats:
     values: dict[str, int] = {}
     for line in text.splitlines():
         key, sep, rest = line.partition(":")
@@ -52,19 +65,35 @@ def parse_meminfo(text: str) -> MemoryStats:
         if sep and fields:
             values[key] = int(fields[0]) * 1024  # /proc/meminfo reports kB
     free = values.get("MemFree", 0)
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable", free)
+    cached = values.get("Cached", 0) + values.get("SReclaimable", 0)
+    if arcstats is not None:
+        # btop counts the ARC as cache, and as available above c_min (the ARC does not shrink below it).
+        arc_size, arc_min = arcstats
+        cached += arc_size
+        if arc_size > arc_min:
+            available += arc_size - arc_min
     return MemoryStats(
-        total=values.get("MemTotal", 0),
-        available=values.get("MemAvailable", free),
+        total=total,
+        available=available,
         free=free,
-        cached=values.get("Cached", 0) + values.get("SReclaimable", 0),
+        cached=cached,
         swap_total=values.get("SwapTotal", 0),
         swap_free=values.get("SwapFree", 0),
     )
 
 
-def read_memory(path: str = PROC_MEMINFO) -> MemoryStats:
+def read_memory(path: str = PROC_MEMINFO, arcstats_path: str | None = None) -> MemoryStats:
+    arcstats = None
+    if arcstats_path is not None:
+        try:
+            with open(arcstats_path, encoding="ascii") as fh:
+                arcstats = parse_arcstats(fh.read())
+        except (OSError, UnicodeDecodeError):
+            arcstats = None
     with open(path, encoding="ascii") as fh:
-        return parse_meminfo(fh.read())
+        return parse_meminfo(fh.read(), arcstats)
 
 
 @dataclass
@@ -137,17 +166,28 @@ def disk_usage_for(mount: Mount) -> DiskUsage | None:
     )
 
 
-def list_disks(only_physical: bool = True) -> list[DiskUsage]:
+def select_mounts(mounts: list[Mount], only_physical: bool = True, zfs_hide_datasets: bool = False) -> list[Mount]:
+    """Mounts shown in the disks list. ZFS pools (device 'pool') and datasets ('pool/name') are physical;
+    zfs_hide_datasets keeps only the pools, as btop does."""
     seen: set[str] = set()
-    result: list[DiskUsage] = []
-    for mount in read_mounts():
+    selected: list[Mount] = []
+    for mount in mounts:
         if mount.fstype in SKIP_FSTYPES:
             continue
-        if only_physical and not mount.device.startswith("/dev/"):
+        if mount.fstype == "zfs" and zfs_hide_datasets and "/" in mount.device:
+            continue
+        if only_physical and not (mount.device.startswith("/dev/") or mount.fstype == "zfs"):
             continue
         if mount.device in seen:
             continue
         seen.add(mount.device)
+        selected.append(mount)
+    return selected
+
+
+def list_disks(only_physical: bool = True, zfs_hide_datasets: bool = False) -> list[DiskUsage]:
+    result: list[DiskUsage] = []
+    for mount in select_mounts(read_mounts(), only_physical, zfs_hide_datasets):
         usage = disk_usage_for(mount)
         if usage is not None and usage.total > 0:
             result.append(usage)

@@ -1,6 +1,6 @@
 """Collector parsing and CPU/memory arithmetic against fixed /proc-format samples."""
 
-from pybtop.collectors import cpu, memory, processes
+from pybtop.collectors import battery, cpu, memory, processes
 from pybtop.config import parse_config_text, parse_value
 from pybtop.theme import parse_theme_text
 
@@ -93,3 +93,66 @@ def test_config_values_keep_btop_types():
     values = parse_config_text('update_ms = 2000\nproc_tree = True\ncolor_theme = "Default"\nbogus line\n')
     assert values == {"update_ms": 2000, "proc_tree": True, "color_theme": "Default"}
     assert parse_value("False") is False
+
+
+def _supply(root, name, **files):
+    path = root / name
+    path.mkdir()
+    for key, value in files.items():
+        (path / key).write_text(f"{value}\n")
+    return path
+
+
+def test_battery_percent_and_time_to_empty_come_from_energy_and_power(tmp_path):
+    _supply(tmp_path, "BAT0", type="Battery", present=1, status="Discharging",
+            energy_now=30000000, energy_full=60000000, power_now=15000000)
+    _supply(tmp_path, "AC", type="Mains", present=1, online=1)
+    info = battery.read_battery(root=str(tmp_path))
+    assert (info.percent, info.status, info.seconds) == (50, "discharging", 7200)
+
+
+def test_battery_status_falls_back_to_ac_online_and_skips_absent_batteries(tmp_path):
+    _supply(tmp_path, "BAT0", type="Battery", present=0, capacity=10, status="Discharging")
+    _supply(tmp_path, "BAT1", type="Battery", present=1, capacity=80, status="Unknown")
+    _supply(tmp_path, "AC0", type="Mains", present=1, online=1)
+    (tmp_path / "BAT1" / "AC0").mkdir()
+    (tmp_path / "BAT1" / "AC0" / "online").write_text("1\n")
+    info = battery.read_battery(root=str(tmp_path))
+    assert (info.percent, info.status, info.seconds) == (80, "charging", -1)
+
+
+def test_no_battery_or_missing_directory_yields_none(tmp_path):
+    _supply(tmp_path, "AC", type="Mains", present=1, online=1)
+    assert battery.read_battery(root=str(tmp_path)) is None
+    assert battery.read_battery(root=str(tmp_path / "missing")) is None
+
+
+ARCSTATS_FIXTURE = """13 1 0x01 96 26112 1234 56 0
+name                            type data
+hits                            4    1000
+c_min                           4    1073741824
+c                               4    2147483648
+size                            4    3221225472
+"""
+
+
+def test_zfs_arc_counts_as_cache_and_as_available_above_c_min():
+    meminfo = "MemTotal: 8388608 kB\nMemFree: 1048576 kB\nMemAvailable: 2097152 kB\nCached: 1048576 kB\n"
+    plain = memory.parse_meminfo(meminfo)
+    with_arc = memory.parse_meminfo(meminfo, memory.parse_arcstats(ARCSTATS_FIXTURE))
+    assert with_arc.cached - plain.cached == 3221225472
+    assert with_arc.available - plain.available == 3221225472 - 1073741824
+    assert memory.parse_arcstats("hits 4 1000\n") is None
+
+
+def test_zfs_hide_datasets_keeps_pools_and_physical_devices_only():
+    mounts = [
+        memory.Mount("/dev/sda1", "/", "ext4"),
+        memory.Mount("tank", "/tank", "zfs"),
+        memory.Mount("tank/home", "/home", "zfs"),
+        memory.Mount("nas:/export", "/mnt/nas", "nfs"),
+    ]
+    shown = [m.mountpoint for m in memory.select_mounts(mounts, only_physical=True)]
+    assert shown == ["/", "/tank", "/home"]
+    hidden = [m.mountpoint for m in memory.select_mounts(mounts, only_physical=True, zfs_hide_datasets=True)]
+    assert hidden == ["/", "/tank"]
