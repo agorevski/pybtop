@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
 import pwd
 import time
@@ -9,6 +11,8 @@ from dataclasses import dataclass, field, replace
 
 from ..textsafe import printable
 from .cpu import read_uptime_seconds
+
+SYS_PIDFD_OPEN = 434
 
 PROC = "/proc"
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
@@ -88,6 +92,23 @@ def read_start_ticks(pid: int, proc_root: str = PROC) -> int | None:
     except OSError:
         return None
     return info.start_ticks if info is not None else None
+
+
+def open_pidfd(pid: int) -> int:
+    """File descriptor that names the process currently at `pid` (Linux 5.3+; syscall 434).
+
+    Python here lacks os.pidfd_open, so the syscall is made directly. The fd keeps referring to
+    that process even if it exits and its PID is reused. Raises ProcessLookupError when the PID
+    is gone and OSError(ENOSYS) when the kernel has no pidfd support.
+    """
+    libc = ctypes.CDLL(None, use_errno=True)
+    fd = libc.syscall(SYS_PIDFD_OPEN, pid, 0)
+    if fd < 0:
+        code = ctypes.get_errno()
+        if code == errno.ESRCH:
+            raise ProcessLookupError(code, os.strerror(code))
+        raise OSError(code, os.strerror(code))
+    return fd
 
 
 def read_command(pid: int) -> str:

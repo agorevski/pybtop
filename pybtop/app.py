@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import math
 import os
 import select
@@ -659,17 +660,30 @@ class App:
         return self.procs[self.selected_index] if self.procs else None
 
     def _send_signal(self, pid: int, start_ticks: int, name: str, sig: int, label: str) -> None:
-        # A reused PID has a different start time, so only signal the process that was confirmed.
+        # Pin the process with a pidfd first, then confirm its start time. A reused PID has a
+        # different start time, and the pidfd can no longer be redirected to another process.
+        fd = None
         try:
+            try:
+                fd = proc_c.open_pidfd(pid)
+            except OSError as exc:
+                if exc.errno != errno.ENOSYS:
+                    raise
             if proc_c.read_start_ticks(pid) != start_ticks:
                 self._flash(f"No such process {pid}")
                 return
-            os.kill(pid, sig)
+            if fd is not None:
+                signal.pidfd_send_signal(fd, sig)
+            else:
+                os.kill(pid, sig)
             self._flash(f"Sent {label} to {name} ({pid})")
         except ProcessLookupError:
             self._flash(f"No such process {pid}")
         except PermissionError:
             self._flash(f"Permission denied sending to {pid}")
+        finally:
+            if fd is not None:
+                os.close(fd)
 
     def _flash(self, message: str) -> None:
         self.status = message

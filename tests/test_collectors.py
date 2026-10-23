@@ -1,6 +1,10 @@
 """Collector parsing and CPU/memory arithmetic against fixed /proc-format samples."""
 
+import os
 import re
+import subprocess
+
+import pytest
 
 from pybtop import log
 from pybtop.collectors import battery, cpu, memory, processes
@@ -79,6 +83,15 @@ def test_start_ticks_reader_uses_the_proc_root_and_reports_missing_pids(tmp_path
     stat.write_text("77 (job) S 1 77 77 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 4242 0 0\n")
     assert processes.read_start_ticks(77, str(tmp_path)) == 4242
     assert processes.read_start_ticks(78, str(tmp_path)) is None
+
+
+def test_open_pidfd_names_live_processes_and_reports_exited_ones():
+    fd = processes.open_pidfd(os.getpid())
+    os.close(fd)
+    child = subprocess.Popen(["true"])
+    child.wait()
+    with pytest.raises(ProcessLookupError):
+        processes.open_pidfd(child.pid)
 
 
 def test_sort_defaults_are_descending_for_numbers_and_ascending_for_names():

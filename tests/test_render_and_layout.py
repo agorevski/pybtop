@@ -244,10 +244,13 @@ def test_braille_box_drawing_and_wide_glyphs_survive_sanitising():
 @pytest.mark.parametrize("current_start, sent", [(4242, True), (9999, False)])
 def test_signal_is_sent_only_while_the_pid_still_has_the_confirmed_start_time(tmp_path, monkeypatch, current_start, sent):
     sent_signals = []
+    opened = []
     monkeypatch.setattr(processes, "read_start_ticks", lambda pid, *a: current_start)
-    monkeypatch.setattr(os, "kill", lambda pid, sig: sent_signals.append((pid, sig)))
+    monkeypatch.setattr(processes, "open_pidfd", lambda pid: opened.append(pid) or os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setattr(signal, "pidfd_send_signal", lambda fd, sig: sent_signals.append((fd, sig)))
     app = App(Config(DEFAULTS), CliOptions(), str(tmp_path))
     app._send_signal(1234, 4242, "job", signal.SIGTERM, "terminate")
+    assert opened == [1234]
     assert bool(sent_signals) is sent
     assert app.status == ("Sent terminate to job (1234)" if sent else "No such process 1234")
 
