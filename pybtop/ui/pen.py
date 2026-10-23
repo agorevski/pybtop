@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 
 from ..render.ansi import Canvas, Cell, Color, gradient_color
+from ..textsafe import printable
 
 H_LINE = "─"
 V_LINE = "│"
@@ -102,7 +103,7 @@ class Pen:
     def write(self, text: str, fg: Color | None = None, bold: bool | None = None) -> None:
         if fg is not None or bold is not None:
             self.style(fg=fg, bold=bold)
-        for ch in text:
+        for ch in printable(text):
             row, col = self.y - 1, self.x - 1
             if 0 <= row < self.canvas.height and 0 <= col < self.canvas.width:
                 cell_bg = self.bg if self.bg is not None else self.canvas.cells[row][col].bg

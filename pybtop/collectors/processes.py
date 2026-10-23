@@ -7,6 +7,7 @@ import pwd
 import time
 from dataclasses import dataclass, field, replace
 
+from ..textsafe import printable
 from .cpu import read_uptime_seconds
 
 PROC = "/proc"
@@ -54,7 +55,7 @@ def parse_stat(pid: int, text: str) -> ProcessInfo | None:
     close_paren = text.rfind(")")
     if open_paren < 0 or close_paren < 0 or close_paren < open_paren:
         return None
-    name = text[open_paren + 1 : close_paren]
+    name = printable(text[open_paren + 1 : close_paren])
     rest = text[close_paren + 2 :].split()
     if len(rest) < 22:
         return None
@@ -82,7 +83,7 @@ def read_command(pid: int) -> str:
             raw = fh.read()
     except OSError:
         return ""
-    return raw.replace(b"\0", b" ").decode("utf-8", errors="replace").strip()
+    return printable(raw.replace(b"\0", b" ").decode("utf-8", errors="replace")).strip()
 
 
 def read_io(pid: int) -> tuple[int, int] | None:

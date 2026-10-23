@@ -63,6 +63,16 @@ def test_process_stat_rejects_truncated_input():
     assert processes.parse_stat(1, "1 (init) S 0") is None
 
 
+def test_process_cmdline_with_escape_sequences_is_read_without_control_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(processes, "PROC", str(tmp_path))
+    (tmp_path / "77").mkdir()
+    payload = b"sh\0-c\0\x1b]52;c;ZXZpbA==\x07\x1b]0;owned\x07\x1b[2J\x1b[H"
+    (tmp_path / "77" / "cmdline").write_bytes(payload)
+    command = processes.read_command(77)
+    assert "\x1b" not in command and "\x07" not in command
+    assert command.startswith("sh -c ")
+
+
 def test_sort_defaults_are_descending_for_numbers_and_ascending_for_names():
     procs = [
         processes.ProcessInfo(pid=3, ppid=1, name="b", state="S", threads=1, utime=0, stime=0,

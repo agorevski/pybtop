@@ -13,7 +13,8 @@ from pybtop.presets import PresetError, parse_preset_string, select_preset
 from pybtop.render import ansi
 from pybtop.theme import load_theme
 from pybtop.ui import layout
-from pybtop.ui.pen import c_round, graph_rows
+from pybtop.textsafe import printable
+from pybtop.ui.pen import Pen, c_round, graph_rows
 
 
 def test_graph_rows_fill_from_the_bottom_with_two_samples_per_cell():
@@ -215,3 +216,22 @@ def test_mouse_clicks_open_and_hide_the_detail_panel_and_fold_tree_rows(tmp_path
     assert app.procs[index].pid in app.collapsed and len(app.procs) < shown
     app.handle_key("space")
     assert not app.collapsed and len(app.procs) == shown
+
+
+def test_escape_sequences_in_rendered_text_never_reach_the_frame():
+    canvas = ansi.Canvas(40, 1)
+    pen = Pen(canvas)
+    pen.to(1, 1)
+    pen.write("\x1b]52;c;ZXZpbA==\x07name\x1b[2J")
+    canvas.put(0, 20, "\x1b]0;owned\x07")
+    frame = canvas.render()
+    assert "\x1b]52" not in frame and "\x1b]0;" not in frame and "\x1b[2J" not in frame
+    assert "name" in frame
+
+
+def test_braille_box_drawing_and_wide_glyphs_survive_sanitising():
+    glyphs = "⣿⢸ ╭─┤│ 漢字 é"
+    assert printable(glyphs) == glyphs
+    canvas = ansi.Canvas(20, 1)
+    canvas.put(0, 0, glyphs)
+    assert "".join(cell.char for cell in canvas.cells[0][: len(glyphs)]) == glyphs

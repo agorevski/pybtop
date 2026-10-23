@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..textsafe import printable
+
 RESET = "\x1b[0m"
 
 
@@ -111,6 +113,7 @@ class Canvas:
         """
         if not (0 <= row < self.height):
             return
+        text = printable(text)
         for i, ch in enumerate(text):
             x = col + i
             if x < 0:
