@@ -1,7 +1,10 @@
 """Collector parsing and CPU/memory arithmetic against fixed /proc-format samples."""
 
+import re
+
+from pybtop import log
 from pybtop.collectors import cpu, memory, processes
-from pybtop.config import parse_config_text, parse_value
+from pybtop.config import merge_config_lines, parse_config_text, parse_value
 from pybtop.theme import parse_theme_text
 
 
@@ -93,3 +96,36 @@ def test_config_values_keep_btop_types():
     values = parse_config_text('update_ms = 2000\nproc_tree = True\ncolor_theme = "Default"\nbogus line\n')
     assert values == {"update_ms": 2000, "proc_tree": True, "color_theme": "Default"}
     assert parse_value("False") is False
+
+
+def test_config_save_keeps_comments_unknown_keys_and_unchanged_lines():
+    old = [
+        "#? Config file for btop v. 1.3.0",
+        "",
+        "#* Frame rate.",
+        "update_ms = 2000",
+        "custom_extra = 7",
+        "#* Tree view.",
+        "proc_tree = False",
+    ]
+    values = {"update_ms": 1500, "proc_tree": False, "new_flag": True}
+    merged = merge_config_lines(old, values)
+    assert merged[:4] == ["#? Config file for btop v. 1.3.0", "", "#* Frame rate.", "update_ms = 1500"]
+    assert "custom_extra = 7" in merged and merged[merged.index("proc_tree = False") - 1] == "#* Tree view."
+    assert merged.index("new_flag = True") == merged.index("proc_tree = False") + 1
+
+
+def test_debug_log_uses_btop_line_format(tmp_path):
+    path = tmp_path / "btop.log"
+    assert log.open_log("0.1.0", "1.3.0", str(path)) == str(path)
+    log.debug("Starting in DEBUG mode!")
+    log.error("Sampling failed")
+    log.close_session()
+    lines = path.read_text().splitlines()
+    stamp = r"\d{4}/\d{2}/\d{2} \(\d{2}:\d{2}:\d{2}\) \| "
+    assert re.fullmatch(stamp + r"===> pybtop 0\.1\.0 \(btop\+\+ 1\.3\.0 compatible\)", lines[0])
+    assert re.fullmatch(stamp + r"DEBUG: Starting in DEBUG mode!", lines[1])
+    assert re.fullmatch(stamp + r"ERROR: Sampling failed", lines[2])
+    assert re.fullmatch(stamp + r"INFO: Quitting! Runtime: 00:00:00", lines[3])
+    log.debug("ignored once closed")
+    assert len(path.read_text().splitlines()) == 4

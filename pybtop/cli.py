@@ -6,6 +6,7 @@ import os
 import sys
 
 from . import config as config_mod
+from . import log
 from .app import BTOP_COMPAT_VERSION, MAX_UPDATE_MS, MIN_UPDATE_MS, VERSION, App, CliOptions, run
 from .defaults import DEFAULTS
 
@@ -110,7 +111,21 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     path = config_mod.config_path()
+    if cli.debug:
+        log.open_log(VERSION, BTOP_COMPAT_VERSION)
+        log.debug("Starting in DEBUG mode!")
+        log.info("Logger set to DEBUG")
+        log.debug(f"Arguments: {' '.join(argv) or '(none)'}")
+        try:
+            log.info(f"Running on {os.ttyname(sys.stdout.fileno())}")
+        except OSError:
+            pass
     cfg = config_mod.Config(DEFAULTS, config_mod.load_config(path))
+    if cli.debug:
+        if os.path.isfile(path):
+            log.debug(f"Loaded config from {path}")
+        else:
+            log.info(f"No config file at {path}, using defaults")
     if cli.update_ms is not None:
         cfg["update_ms"] = cli.update_ms
     user_theme_dir = os.path.join(config_mod.config_dir(), "themes")

@@ -62,10 +62,60 @@ def load_config(path: str | None = None) -> dict[str, Any]:
         return {}
 
 
+def merge_config_lines(old_lines: list[str], values: dict[str, Any]) -> list[str]:
+    """Apply `values` to an existing file's lines, keeping comments, blank lines and unknown keys.
+
+    A key whose value changed is rewritten in place; unchanged lines are kept byte-for-byte. A key
+    missing from the file is inserted after the nearest earlier key (in `values` order) that is
+    present, or before the first key line when none is.
+    """
+    order = list(values)
+    lines = list(old_lines)
+    present: set[str] = set()
+    for idx, line in enumerate(lines):
+        match = CONFIG_LINE.match(line)
+        if not match or match.group(1) not in values:
+            continue
+        key = match.group(1)
+        present.add(key)
+        current = parse_value(match.group(2))
+        if type(current) is not type(values[key]) or current != values[key]:
+            lines[idx] = f"{key} = {format_value(values[key])}"
+
+    def key_line(key: str) -> int | None:
+        for idx, line in enumerate(lines):
+            match = CONFIG_LINE.match(line)
+            if match and match.group(1) == key:
+                return idx
+        return None
+
+    for key in order:
+        if key in present:
+            continue
+        new_line = f"{key} = {format_value(values[key])}"
+        anchor = None
+        for prev in reversed(order[: order.index(key)]):
+            anchor = key_line(prev)
+            if anchor is not None:
+                break
+        if anchor is not None:
+            lines.insert(anchor + 1, new_line)
+        else:
+            first = next((i for i, line in enumerate(lines) if CONFIG_LINE.match(line)), len(lines))
+            lines.insert(first, new_line)
+        present.add(key)
+    return lines
+
+
 def write_config(values: dict[str, Any], path: str | None = None) -> None:
     path = path or config_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    lines = [f"{key} = {format_value(val)}" for key, val in values.items()]
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            old_lines = fh.read().splitlines()
+    except OSError:
+        old_lines = []
+    lines = merge_config_lines(old_lines, values)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 

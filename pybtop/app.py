@@ -12,6 +12,7 @@ import tty
 from collections import deque
 from dataclasses import dataclass, field
 from . import config as config_mod
+from . import log
 from .collectors import cpu as cpu_c
 from .collectors import memory as mem_c
 from .collectors import network as net_c
@@ -707,6 +708,7 @@ class App:
         self.cfg["shown_boxes"] = " ".join(b for b in ALL_BOXES if b in self.shown)
         self.cfg["proc_sorting"] = self.proc_sort
         if self.cfg.values != self.values_snapshot:
+            log.debug(f"Writing new config file: {path}")
             config_mod.write_config(self.cfg.values, path)
 
 
@@ -736,7 +738,13 @@ def run(app: App, config_path: str) -> int:
                 for key in decoder.flush():
                     app.handle_key(key)
             if time.monotonic() >= next_tick:
-                app.sample()
+                started = time.perf_counter()
+                try:
+                    app.sample()
+                except Exception as exc:
+                    log.error(f"Sampling failed: {exc!r}")
+                    raise
+                log.debug(f"Collect took {(time.perf_counter() - started) * 1e6:.0f} us")
                 next_tick = time.monotonic() + app.update_ms / 1000.0
             size = os.get_terminal_size(fd)
             if size != last_size or app.dirty:
@@ -755,7 +763,9 @@ def run(app: App, config_path: str) -> int:
         try:
             app.save_config(config_path)
         except OSError as exc:
+            log.error(f"Could not save config to {config_path}: {exc}")
             sys.stderr.write(f"Warning: could not save config to {config_path}: {exc}\n")
+        log.close_session()
     return 0
 
 
