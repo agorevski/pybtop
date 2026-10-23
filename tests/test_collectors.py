@@ -63,6 +63,14 @@ def test_process_stat_rejects_truncated_input():
     assert processes.parse_stat(1, "1 (init) S 0") is None
 
 
+def test_start_ticks_reader_uses_the_proc_root_and_reports_missing_pids(tmp_path):
+    stat = tmp_path / "77" / "stat"
+    stat.parent.mkdir()
+    stat.write_text("77 (job) S 1 77 77 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 4242 0 0\n")
+    assert processes.read_start_ticks(77, str(tmp_path)) == 4242
+    assert processes.read_start_ticks(78, str(tmp_path)) is None
+
+
 def test_sort_defaults_are_descending_for_numbers_and_ascending_for_names():
     procs = [
         processes.ProcessInfo(pid=3, ppid=1, name="b", state="S", threads=1, utime=0, stime=0,

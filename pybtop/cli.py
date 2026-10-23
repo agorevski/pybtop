@@ -7,7 +7,7 @@ import sys
 
 from . import config as config_mod
 from . import log
-from .app import BTOP_COMPAT_VERSION, MAX_UPDATE_MS, MIN_UPDATE_MS, VERSION, App, CliOptions, run
+from .app import BTOP_COMPAT_VERSION, VERSION, App, CliOptions, clamp_update_ms, run
 from .defaults import DEFAULTS
 
 HELP_TEXT = """usage: pybtop [-h] [-v] [-/+t] [-p <id>] [-u <ms>] [--utf-force] [--debug]
@@ -79,7 +79,7 @@ def _parse_update(value: str) -> int:
         number = int(value)
     except ValueError:
         raise ArgError("ERROR: Invalid update rate") from None
-    return max(MIN_UPDATE_MS, min(MAX_UPDATE_MS, number))
+    return clamp_update_ms(number)
 
 
 def has_utf8_locale() -> bool:
