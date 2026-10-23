@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 from ..render.ansi import Canvas
 from .draw import draw_box, draw_title_buttons, text
 from .palette import Palette
+
+# Receives (key, row, col, height, width) in 0-based canvas cells for each clickable region.
+MouseHook = Callable[[str, int, int, int, int], None]
 
 BOX_W = 78
 MENU_ITEMS = ["Options", "Help", "Quit"]
@@ -125,7 +130,7 @@ OPTIONS = [
 ]
 
 
-def draw_options(canvas: Canvas, pal: Palette, selected: int, values: dict) -> None:
+def draw_options(canvas: Canvas, pal: Palette, selected: int, values: dict, mouse: MouseHook | None = None) -> None:
     width = BOX_W
     height = 32
     row = center(width, canvas.height, height)
@@ -144,12 +149,16 @@ def draw_options(canvas: Canvas, pal: Palette, selected: int, values: dict) -> N
         line = f"{mark} {label:<18}{value:>10}"
         fg = pal.selected_fg if idx == selected else pal.main_fg
         bg = pal.selected_bg if idx == selected else None
+        if mouse is not None:
+            mouse(f"option_{idx}", r, col + 1, 1, left_w)
         if bg is not None:
             canvas.fill_rect(r, col + 1, 1, left_w, bg)
         text(canvas, r, col + 1, line[:left_w].ljust(left_w), fg)
         if idx == selected:
             for j, note in enumerate(desc[: height - 4]):
                 text(canvas, row + 2 + j, col + left_w + 3, note[: width - left_w - 6], pal.graph_text)
+    if mouse is not None:  # last, so the option rows win over the frame where they overlap
+        mouse("frame", row, col, height, width)
 
 
 def _option_value(value: object) -> str:
@@ -158,7 +167,7 @@ def _option_value(value: object) -> str:
     return str(value)
 
 
-def draw_menu(canvas: Canvas, pal: Palette, selected: int, items: list[str]) -> None:
+def draw_menu(canvas: Canvas, pal: Palette, selected: int, items: list[str], mouse: MouseHook | None = None) -> None:
     width = 30
     height = len(items) + 4
     row = center(width, canvas.height, height)
@@ -167,6 +176,8 @@ def draw_menu(canvas: Canvas, pal: Palette, selected: int, items: list[str]) -> 
     for i, item in enumerate(items):
         selected_row = i == selected
         r = row + 2 + i
+        if mouse is not None:
+            mouse(f"button_{i}", r, col + 1, 1, width - 2)
         if selected_row:
             canvas.fill_rect(r, col + 1, 1, width - 2, pal.selected_bg)
         text(canvas, r, col + 2, item.ljust(width - 4), pal.selected_fg if selected_row else pal.main_fg)

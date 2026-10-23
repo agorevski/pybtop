@@ -5,11 +5,17 @@ from __future__ import annotations
 import os
 import pwd
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 PROC = "/proc"
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+# Process state letters as btop 1.3.0 expands them in its detail panel.
+STATE_NAMES = {
+    "R": "Running", "S": "Sleeping", "D": "Waiting", "Z": "Zombie", "T": "Stopped", "t": "Tracing",
+    "X": "Dead", "x": "Dead", "K": "Wakekill", "W": "Unknown", "P": "Parked",
+}
 
 
 @dataclass
@@ -23,6 +29,7 @@ class ProcessInfo:
     stime: int
     start_ticks: int
     rss_bytes: int
+    nice: int = 0
     uid: int = -1
     command: str = ""
     user: str = ""
@@ -31,6 +38,7 @@ class ProcessInfo:
     cpu_percent: float = 0.0
     mem_percent: float = 0.0
     children: list[int] = field(default_factory=list)
+    prefix: str = ""  # tree-view prefix, set by tree_order
 
     @property
     def cpu_ticks(self) -> int:
@@ -57,6 +65,7 @@ def parse_stat(pid: int, text: str) -> ProcessInfo | None:
             utime=int(rest[11]),
             stime=int(rest[12]),
             threads=int(rest[17]),
+            nice=int(rest[16]),
             start_ticks=int(rest[19]),
             rss_bytes=int(rest[21]) * PAGE_SIZE,
         )
@@ -71,6 +80,22 @@ def read_command(pid: int) -> str:
     except OSError:
         return ""
     return raw.replace(b"\0", b" ").decode("utf-8", errors="replace").strip()
+
+
+def read_io(pid: int) -> tuple[int, int] | None:
+    """Bytes read and written from /proc/<pid>/io, or None when the file is not readable."""
+    values: dict[str, int] = {}
+    try:
+        with open(os.path.join(PROC, str(pid), "io"), encoding="ascii", errors="replace") as fh:
+            for line in fh:
+                key, _, value = line.partition(":")
+                if key in ("read_bytes", "write_bytes"):
+                    values[key] = int(value)
+    except (OSError, ValueError):
+        return None
+    if len(values) < 2:
+        return None
+    return values["read_bytes"], values["write_bytes"]
 
 
 def user_name(uid: int) -> str:
@@ -168,8 +193,14 @@ def filter_processes(procs: list[ProcessInfo], text: str, hide_kernel: bool = Fa
     return out
 
 
-def tree_order(procs: list[ProcessInfo]) -> list[tuple[ProcessInfo, int]]:
-    """Depth-first ordering by parent pid. Returns (process, depth) pairs."""
+def tree_order(
+    procs: list[ProcessInfo], collapsed: set[int] | frozenset[int] = frozenset()
+) -> list[tuple[ProcessInfo, int]]:
+    """Depth-first ordering by parent pid. Returns (process, depth) pairs and sets each prefix.
+
+    As in btop, a pid in `collapsed` hides its subtree and its row shows the summed CPU, memory and
+    threads of that subtree; collapsed and parent rows carry a '[+]─' or '[-]─' marker.
+    """
     by_pid = {p.pid: p for p in procs}
     children: dict[int, list[ProcessInfo]] = {}
     roots: list[ProcessInfo] = []
@@ -181,14 +212,41 @@ def tree_order(procs: list[ProcessInfo]) -> list[tuple[ProcessInfo, int]]:
     ordered: list[tuple[ProcessInfo, int]] = []
     seen: set[int] = set()
 
-    def walk(proc: ProcessInfo, depth: int) -> None:
+    def walk(proc: ProcessInfo, depth: int, last: bool) -> None:
         if proc.pid in seen:
             return
         seen.add(proc.pid)
-        ordered.append((proc, depth))
-        for child in sorted(children.get(proc.pid, []), key=lambda c: c.pid):
-            walk(child, depth + 1)
+        kids = sorted(children.get(proc.pid, []), key=lambda c: c.pid)
+        shown = proc
+        if kids and proc.pid in collapsed:
+            shown = _with_subtree_totals(proc, children)
+        if kids:
+            marker = "[+]─" if proc.pid in collapsed else "[-]─"
+        else:
+            marker = " └─ " if last else " ├─ "
+        shown.prefix = " │ " * depth + marker
+        ordered.append((shown, depth))
+        if proc.pid in collapsed:
+            return
+        for index, child in enumerate(kids):
+            walk(child, depth + 1, index == len(kids) - 1)
 
     for root in sorted(roots, key=lambda p: p.pid):
-        walk(root, 0)
+        walk(root, 0, False)
     return ordered
+
+
+def _with_subtree_totals(proc: ProcessInfo, children: dict[int, list[ProcessInfo]]) -> ProcessInfo:
+    """Copy of `proc` whose CPU, memory and thread counts include every descendant (the originals stay intact)."""
+    descendants: list[ProcessInfo] = []
+    stack = list(children.get(proc.pid, []))
+    while stack:
+        child = stack.pop()
+        descendants.append(child)
+        stack.extend(children.get(child.pid, []))
+    return replace(
+        proc,
+        cpu_percent=proc.cpu_percent + sum(c.cpu_percent for c in descendants),
+        rss_bytes=proc.rss_bytes + sum(c.rss_bytes for c in descendants),
+        threads=proc.threads + sum(c.threads for c in descendants),
+    )

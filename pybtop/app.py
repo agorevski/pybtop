@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import select
 import signal
@@ -18,14 +19,15 @@ from .collectors import network as net_c
 from .collectors import processes as proc_c
 from .collectors import sensors as sens_c
 from .defaults import DEFAULTS
-from .fmt import floating_humanizer
-from .keys import KeyDecoder
+from .fmt import elapsed_text, floating_humanizer
+from .keys import KeyDecoder, MouseEvent
 from .presets import Preset, PresetError, parse_preset_string, select_preset
 from .render.ansi import Canvas
 from .theme import Theme, available_themes, load_theme
 from .ui import layout
 from .ui import overlays as ov
 from .ui import btop_boxes, btop_cpu
+from .ui.btop_boxes import DETAIL_ROWS
 from .ui.palette import Palette
 from .ui.pen import Pen
 
@@ -37,6 +39,10 @@ HISTORY = 360
 NET_TOP_FLOOR = 10 * 1024
 MIN_UPDATE_MS, MAX_UPDATE_MS = 100, 86400000
 SIGNAL_NAMES = {"terminate": signal.SIGTERM, "kill": signal.SIGKILL}
+# SGR mouse reporting (1002 button events, 1006 SGR coordinates), enabled the way btop 1.3.0 enables it.
+MOUSE_ON = "\x1b[?1002h\x1b[?1006h"
+MOUSE_OFF = "\x1b[?1006l\x1b[?1002l"
+WHEEL_STEP = 3
 
 
 @dataclass
@@ -47,6 +53,21 @@ class CliOptions:
     update_ms: int | None = None
     utf_force: bool = False
     debug: bool = False
+
+
+@dataclass
+class DetailView:
+    """State of the process detail panel: the pid it follows and the last values seen for it."""
+
+    pid: int
+    cpu_hist: deque[float]
+    mem_hist: deque[float]
+    mem_top: float = 0.0
+    info: proc_c.ProcessInfo | None = None
+    alive: bool = True
+    elapsed: str = ""
+    parent: str = ""
+    io: tuple[int, int] | None = None
 
 
 @dataclass
@@ -136,6 +157,11 @@ class App:
         self.selected_index = 0
         self.selected_pid: int | None = None
         self.proc_scroll = 0
+        self.collapsed: set[int] = set()
+        self.detail: DetailView | None = None
+        self.uptime_s = 0.0
+        self.mouse_map: list[tuple[str, int, int, int, int]] = []  # (key, line, col, height, width), 1-based
+        self.proc_area: tuple[int, int, int, int, int, int] | None = None  # x, y, width, height, list_y, list_h
         self.filter_text = ""
         self.filter_buffer = ""
         self.filter_editing = False
@@ -237,7 +263,8 @@ class App:
             hist.append(pct)
 
         self.freqs = cpu_c.read_frequencies_mhz()
-        self.uptime_text = cpu_c.format_uptime(cpu_c.read_uptime_seconds())
+        self.uptime_s = cpu_c.read_uptime_seconds()
+        self.uptime_text = cpu_c.format_uptime(self.uptime_s)
         self.loadavg = cpu_c.read_loadavg()
         clock_format = self.cfg.get_str("clock_format")
         self.clock_text = time.strftime(clock_format) if clock_format else ""
@@ -284,6 +311,8 @@ class App:
         for pid in [pid for pid in self.proc_hist if pid not in live]:
             del self.proc_hist[pid]
         self._rebuild_process_list(all_procs)
+        self.collapsed.intersection_update(p.pid for p in all_procs)
+        self._update_detail(all_procs)
         self.dirty = True
 
     def _rebuild_process_list(self, all_procs: list[proc_c.ProcessInfo]) -> None:
@@ -294,15 +323,23 @@ class App:
             procs = proc_c.filter_processes(procs, self.filter_text, hide_kernel=False)
         self.proc_depths = {}
         if self.proc_tree:
-            ordered = proc_c.tree_order(procs)
+            ordered = proc_c.tree_order(procs, self.collapsed)
             if self.proc_reversed:
                 ordered = list(reversed(ordered))
             self.procs = [p for p, _ in ordered]
             self.proc_depths = {p.pid: depth for p, depth in ordered}
         else:
             self.procs = proc_c.sort_processes(procs, self.proc_sort, reverse=self.proc_reversed)
+        if self.selected_pid is not None:  # keep the highlight on the same process when the order changes
+            self.selected_index = next(
+                (i for i, p in enumerate(self.procs) if p.pid == self.selected_pid), self.selected_index
+            )
         self.selected_index = max(0, min(self.selected_index, len(self.procs) - 1))
         self.selected_pid = self.procs[self.selected_index].pid if self.procs else None
+
+    def proc_list_rows(self, box_height: int) -> int:
+        """Process rows in a PROC box of this height; the detail panel takes DETAIL_ROWS of them."""
+        return max(1, box_height - 3 - (DETAIL_ROWS if self.detail is not None else 0))
 
     def visible_process_rows(self, rows: int) -> list[tuple[proc_c.ProcessInfo, int]]:
         if rows <= 0:
@@ -400,8 +437,10 @@ class App:
 
     # ----- input -----------------------------------------------------------------------------
 
-    def handle_key(self, key: str) -> None:
+    def handle_key(self, key: str | MouseEvent) -> None:
         self.dirty = True
+        if isinstance(key, MouseEvent):
+            return self._key_mouse(key)
         if self.signal_buf is not None:
             return self._key_signal_prompt(key)
         if self.confirm is not None:
@@ -440,6 +479,8 @@ class App:
             self.cycle_preset(1)
         elif key == "P":
             self.cycle_preset(-1)
+        elif key in ("+", "-", "space") and self.proc_tree:
+            self._toggle_collapse(key)
         elif key in ("+", "-"):
             step = 100 if key == "+" else -100
             self.update_ms = max(MIN_UPDATE_MS, min(MAX_UPDATE_MS, self.update_ms + step))
@@ -485,7 +526,9 @@ class App:
         elif key == "z":
             self.net_monitor.total_rx = 0
             self.net_monitor.total_tx = 0
-        elif key in ("t", "enter"):
+        elif key == "enter":
+            self._toggle_detail()
+        elif key == "t":
             self._request_confirm("terminate")
         elif key == "k":
             self._request_confirm("kill")
@@ -647,11 +690,171 @@ class App:
     def _page(self) -> int:
         return max(1, self.proc_page_rows)
 
+    def _scroll_to(self, start: int) -> None:
+        """Move the process view; the selected row keeps its screen position, as in btop."""
+        rows = self.proc_page_rows
+        start = max(0, min(start, max(0, len(self.procs) - rows)))
+        delta = start - self.proc_scroll
+        if delta:
+            self.proc_scroll = start
+            self._set_selection(self.selected_index + delta)
+
+    def _select_pid(self, pid: int) -> None:
+        for index, proc in enumerate(self.procs):
+            if proc.pid == pid:
+                self._set_selection(index)
+                return
+
+    def _toggle_collapse(self, key: str) -> None:
+        """Tree view: '+' expands, '-' collapses, Space toggles the selected process."""
+        proc = self._selected_proc()
+        if proc is None:
+            return
+        if key == "+":
+            self.collapsed.discard(proc.pid)
+        elif key == "-":
+            self.collapsed.add(proc.pid)
+        elif proc.pid in self.collapsed:
+            self.collapsed.discard(proc.pid)
+        else:
+            self.collapsed.add(proc.pid)
+        self._rebuild_process_list(self._all_procs)
+        self._select_pid(proc.pid)
+
+    def _toggle_detail(self) -> None:
+        """Enter: show the detail panel for the selected process, or hide it when it already shows that process."""
+        proc = self._selected_proc()
+        if proc is None:
+            return
+        if self.detail is not None and self.detail.pid == proc.pid:
+            self.detail = None
+            return
+        self.detail = DetailView(pid=proc.pid, cpu_hist=deque(maxlen=HISTORY), mem_hist=deque(maxlen=HISTORY))
+        self._update_detail(self._all_procs)
+        if self.detail.info is None:
+            self.detail = None
+
+    def _update_detail(self, all_procs: list[proc_c.ProcessInfo]) -> None:
+        detail = self.detail
+        if detail is None:
+            return
+        live = next((p for p in all_procs if p.pid == detail.pid), None)
+        detail.alive = live is not None
+        if live is None:
+            return
+        detail.info = live
+        detail.cpu_hist.append(float(max(0, min(100, round(live.cpu_percent)))))
+        total = self.mem.total if self.mem else 0
+        if not detail.mem_top and live.rss_bytes:
+            detail.mem_top = float(min(2 * live.rss_bytes, total or 2 * live.rss_bytes))
+        detail.mem_hist.append(min(100.0, 100.0 * live.rss_bytes / detail.mem_top) if detail.mem_top else 0.0)
+        detail.io = proc_c.read_io(live.pid)
+        detail.elapsed = elapsed_text(round(self.uptime_s) - live.start_ticks // proc_c.CLK_TCK)
+        detail.parent = next((p.name for p in all_procs if p.pid == live.ppid), "")
+
+    # ----- mouse -----------------------------------------------------------------------------
+
+    def map_mouse(self, key: str, line: int, col: int, height: int, width: int) -> None:
+        """Register a clickable region (1-based screen cells) that acts as `key` when clicked."""
+        if self.overlay is None:
+            self.mouse_map.append((key, line, col, height, width))
+
+    def _map_overlay(self, key: str, row: int, col: int, height: int, width: int) -> None:
+        """Same as map_mouse, for overlay drawing code that works in 0-based canvas cells."""
+        self.mouse_map.append((key, row + 1, col + 1, height, width))
+
+    def _mouse_target(self, ev: MouseEvent) -> str | None:
+        for key, line, col, height, width in self.mouse_map:
+            if col <= ev.col < col + width and line <= ev.row < line + height:
+                return key
+        return None
+
+    def _in_proc_list(self, ev: MouseEvent) -> bool:
+        x, _, width, _, top, height = self.proc_area  # type: ignore[misc]
+        return x + 1 <= ev.col < x + width and top + 1 <= ev.row < top + height - 1
+
+    def _key_mouse(self, ev: MouseEvent) -> None:
+        if self.overlay is not None:
+            return self._mouse_overlay(ev)
+        if self.confirm is not None or self.signal_buf is not None:
+            return
+        if self.filter_editing:
+            if ev.kind == "click":
+                self._key_filter("esc")  # a click cancels the filter, as in btop
+            return
+        if ev.kind != "click":
+            if self.proc_area is not None and self._in_proc_list(ev):
+                self._scroll_to(self.proc_scroll + (-WHEEL_STEP if ev.kind == "scroll_up" else WHEEL_STEP))
+            return
+        target = self._mouse_target(ev)
+        if target is not None:
+            return self.handle_key(target)
+        if self.proc_area is not None and self._in_proc_list(ev):
+            self._click_proc_list(ev)
+
+    def _click_proc_list(self, ev: MouseEvent) -> None:
+        x, _, width, _, top, height = self.proc_area  # type: ignore[misc]
+        rows = self.proc_page_rows
+        if ev.col >= x + width - 2:  # scrollbar column
+            if ev.row == top + 1:
+                self._scroll_to(self.proc_scroll - rows)
+            elif ev.row == top + height - 2:
+                self._scroll_to(self.proc_scroll + rows)
+            elif rows > 2:
+                mouse_y = ev.row - top - 2
+                self._scroll_to(math.floor(mouse_y * (len(self.procs) - rows - 2) / (rows - 2) + 0.5))
+            return
+        offset = ev.row - top - 2  # the header row (offset -1) does nothing
+        index = self.proc_scroll + offset
+        if offset < 0 or offset >= rows or index >= len(self.procs):
+            return
+        if index != self.selected_index:
+            return self._set_selection(index)
+        # Clicking the selected row opens its details; a click on its tree marker folds the subtree.
+        marker = x + 10 + 3 * self.proc_depths.get(self.procs[index].pid, 0)
+        if self.proc_tree and marker <= ev.col < marker + 3:
+            return self.handle_key("space")
+        self.handle_key("enter")
+
+    def _mouse_overlay(self, ev: MouseEvent) -> None:
+        if ev.kind != "click":
+            direction = "up" if ev.kind == "scroll_up" else "down"
+            if self.overlay == "menu":
+                self._key_menu(direction)
+            elif self.overlay == "options":
+                self._key_options(direction)
+            elif self.overlay == "help":
+                self._key_help(direction)
+            return
+        target = self._mouse_target(ev)
+        if self.overlay == "menu":
+            if target is None:
+                self.overlay = None
+            elif target.startswith("button_"):
+                index = int(target.removeprefix("button_"))
+                if index == self.menu_sel:
+                    self._key_menu("enter")
+                else:
+                    self.menu_sel = index
+        elif self.overlay == "options":
+            if target is None:
+                self.overlay = None
+            elif target.startswith("option_"):
+                index = int(target.removeprefix("option_"))
+                if index == self.options_sel:
+                    self._key_options("enter")
+                else:
+                    self.options_sel = index
+        else:
+            self.overlay = None
+
     # ----- rendering -------------------------------------------------------------------------
 
     def render(self, width: int, height: int) -> str:
         canvas = Canvas(width, height)
         pal = self.palette
+        self.mouse_map = []
+        self.proc_area = None
         if pal.bg is not None:
             canvas.fill_rect(0, 0, height, width, pal.bg)
         if not layout.fits(width, height):
@@ -668,7 +871,7 @@ class App:
             ])
             return canvas.render(self.low_color)
 
-        self.proc_page_rows = max(1, rects["proc"].inner.height - 1) if "proc" in rects else 10
+        self.proc_page_rows = self.proc_list_rows(rects["proc"].height) if "proc" in rects else 10
         pen = Pen(canvas)
         if "cpu" in rects:
             btop_cpu.draw_cpu(self, pen, width, rects["cpu"].height)
@@ -686,9 +889,9 @@ class App:
             ov.draw_help(canvas, pal, self.help_page)
         elif self.overlay == "options":
             values = {key: self.cfg[key] for _, key, _, _, _ in ov.OPTIONS}
-            ov.draw_options(canvas, pal, self.options_sel, values)
+            ov.draw_options(canvas, pal, self.options_sel, values, self._map_overlay)
         elif self.overlay == "menu":
-            ov.draw_menu(canvas, pal, self.menu_sel, ov.MENU_ITEMS)
+            ov.draw_menu(canvas, pal, self.menu_sel, ov.MENU_ITEMS, self._map_overlay)
         if self.confirm is not None:
             action, pid, name = self.confirm
             verb = action.replace("signal:", "send signal ") if action.startswith("signal:") else action
@@ -717,7 +920,7 @@ def run(app: App, config_path: str) -> int:
     out = sys.stdout
     decoder = KeyDecoder()
     tty.setcbreak(fd)
-    out.write("\x1b[?1049h\x1b[?25l\x1b[2J")
+    out.write("\x1b[?1049h\x1b[?25l\x1b[2J" + MOUSE_ON)
     out.flush()
     last_size: tuple[int, int] | None = None
     next_tick = time.monotonic() + app.update_ms / 1000.0
@@ -748,7 +951,7 @@ def run(app: App, config_path: str) -> int:
                 app.status = ""
                 app.dirty = True
     finally:
-        out.write("\x1b[0m\x1b[?25h\x1b[?1049l")
+        out.write(MOUSE_OFF + "\x1b[0m\x1b[?25h\x1b[?1049l")
         out.flush()
         termios.tcsetattr(fd, termios.TCSADRAIN, old_attrs)
         app.gpu_reader.close()

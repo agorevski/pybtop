@@ -84,11 +84,11 @@ Checks then run in this order: UTF-8 locale (unless `--utf-force`), then a tty. 
 
 Verified on screen or through the saved config: `1`–`5`, `d`, `i`, `p`/`P`, `+`/`-`, arrows, PgUp/PgDn, Home/End, Left/Right sort cycling (`pid → program → arguments → threads → user → memory → cpu direct → cpu lazy`), `r`, `e`, `c`, `%`, `f`/`/`, `b`/`n`, `a`, `y`, `h`/`?`, `o`, `q`, `Esc`.
 
-Unverified in btop, so implemented here as stated in the README: `t`, `k`, `s` dialogs (no dialog was observed in the captures) and Enter.
+Mouse and Enter were checked on a pty against btop 1.3.0: clicks on the buttons, process rows, sort arrows and tree markers, the wheel over the process list, and Enter (which opens the process detail panel). Unverified in btop: the `t`, `k`, `s` dialogs (no dialog was observed in the captures).
 
 ## Known gaps in the reference observations
 
 - Menu item labels never appeared in the byte stream; the `m` menu is therefore this project's own.
 - `F1`/`F2` did not open help or options with the tested escape sequences; `F1`/`F2` are still accepted here.
 - The `@` title on the CPU meter box is btop's Xeon CPU-name quirk (`get_cpuName` returns the word after `CPU`), reproduced here. The `L 2 2 1` abbreviation is the load-average label for narrow sub-boxes (`L`, `LAV:`, `Load AVG:`), also reproduced.
-- Battery, ZFS, disk I/O graphs and the per-process detail view were not exercised: the reference machine has no battery or ZFS, and the process detail view was not reached safely.
+- Battery, ZFS and disk I/O graphs were not exercised: the reference machine has no battery or ZFS. The process detail panel was compared with btop's layout on a pty; its values come from `/proc` (btop reads smaps for memory, pybtop uses RSS from `stat`).

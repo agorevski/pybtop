@@ -137,3 +137,12 @@ def floating_humanizer(
 
 def c_round_int(value: float) -> int:
     return int(value + 0.5) if value >= 0 else -int(-value + 0.5)
+
+
+def elapsed_text(seconds: int) -> str:
+    """Process runtime as btop's detail panel shows it: 'HH:MM:SS', or 'Nd HH:MM' once a day has passed."""
+    days, rest = divmod(max(0, seconds), 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    text = (f"{days}d " if days else "") + f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return text[:-3] if len(text) > 8 else text

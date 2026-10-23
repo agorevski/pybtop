@@ -3,7 +3,10 @@
 import pytest
 
 from pybtop import fmt
-from pybtop.keys import KeyDecoder
+from pybtop.app import App, CliOptions
+from pybtop.config import Config
+from pybtop.defaults import DEFAULTS
+from pybtop.keys import KeyDecoder, MouseEvent
 from pybtop.presets import PresetError, parse_preset_string, select_preset
 from pybtop.render import ansi
 from pybtop.ui import layout
@@ -93,6 +96,20 @@ def test_key_decoder_drops_unknown_csi_without_emitting_its_bytes():
     assert dec.feed(b"\x1b[99;2Xq") == ["q"]
 
 
+def test_key_decoder_reads_sgr_clicks_and_wheel_and_ignores_releases_and_other_buttons():
+    dec = KeyDecoder()
+    keys = dec.feed(b"\x1b[<0;12;5M\x1b[<64;3;4M\x1b[<0;12;5m\x1b[<2;1;1M\x1b[<65;7;8M")
+    assert keys == [MouseEvent("click", 12, 5), MouseEvent("scroll_up", 3, 4), MouseEvent("scroll_down", 7, 8)]
+
+
+def test_key_decoder_holds_a_split_mouse_report_and_flush_never_replays_its_digits():
+    dec = KeyDecoder()
+    assert dec.feed(b"\x1b[<0;12;") == []
+    assert dec.feed(b"5M") == [MouseEvent("click", 12, 5)]
+    assert dec.feed(b"\x1b[<0;1") == []
+    assert dec.flush() == []  # the digits would otherwise act as keys (1-5 toggle boxes)
+
+
 def test_layout_boxes_do_not_overlap_and_fill_the_screen():
     for width, height in [(80, 24), (120, 40), (160, 50)]:
         rects = layout.compute(width, height, gpu_count=4)
@@ -111,3 +128,34 @@ def test_layout_matches_btop_120x40_rows_with_four_gpus():
     assert (rects["mem"].row, rects["mem"].height) == (17, 11)
     assert (rects["net"].row, rects["net"].height) == (28, 12)
     assert (rects["proc"].col, rects["proc"].width) == (54, 66)
+
+
+def test_elapsed_text_drops_seconds_once_a_day_has_passed():
+    assert fmt.elapsed_text(3723) == "01:02:03"
+    assert fmt.elapsed_text(90061) == "1d 01:01"
+
+
+def test_mouse_clicks_open_and_hide_the_detail_panel_and_fold_tree_rows(tmp_path):
+    app = App(Config(DEFAULTS), CliOptions(), str(tmp_path))
+    app.render(120, 40)
+    x, y, _, _, top, _ = app.proc_area
+    row_click = MouseEvent("click", x + 15, top + 3)  # second visible process row
+    app.handle_key(row_click)
+    app.render(120, 40)
+    assert app.selected_index == 1
+    app.handle_key(row_click)  # clicking the selected row opens its detail
+    assert app.detail is not None and app.detail.pid == app.selected_pid
+    app.render(120, 40)
+    hide = next(m for m in app.mouse_map if m[0] == "enter" and m[1] == y)  # 'hide ↵' on the panel's top border
+    app.handle_key(MouseEvent("click", hide[2], hide[1]))
+    assert app.detail is None
+
+    app.handle_key("e")  # tree view: Space folds the selected parent and unfolds it again
+    parents = {p.ppid for p in app.procs}
+    index = next(i for i, p in enumerate(app.procs) if p.pid in parents)
+    app._set_selection(index)
+    shown = len(app.procs)
+    app.handle_key("space")
+    assert app.procs[index].pid in app.collapsed and len(app.procs) < shown
+    app.handle_key("space")
+    assert not app.collapsed and len(app.procs) == shown
