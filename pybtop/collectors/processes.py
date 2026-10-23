@@ -77,6 +77,19 @@ def parse_stat(pid: int, text: str) -> ProcessInfo | None:
         return None
 
 
+def read_start_ticks(pid: int, proc_root: str = PROC) -> int | None:
+    """Start time (field 22 of /proc/<pid>/stat, in clock ticks since boot), or None if unreadable.
+
+    Together with the PID this identifies a process instance: a reused PID gets a new start time.
+    """
+    try:
+        with open(os.path.join(proc_root, str(pid), "stat"), encoding="utf-8", errors="replace") as fh:
+            info = parse_stat(pid, fh.read())
+    except OSError:
+        return None
+    return info.start_ticks if info is not None else None
+
+
 def read_command(pid: int) -> str:
     try:
         with open(os.path.join(PROC, str(pid), "cmdline"), "rb") as fh:

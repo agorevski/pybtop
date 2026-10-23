@@ -47,6 +47,10 @@ MOUSE_OFF = "\x1b[?1006l\x1b[?1002l"
 WHEEL_STEP = 3
 
 
+def clamp_update_ms(value: int) -> int:
+    return max(MIN_UPDATE_MS, min(MAX_UPDATE_MS, value))
+
+
 @dataclass
 class CliOptions:
     low_color: bool = False
@@ -93,7 +97,8 @@ class App:
 
         self.tty_mode = cli.tty if cli.tty is not None else cfg.get_bool("force_tty")
         self.low_color = cli.low_color or not cfg.get_bool("truecolor") or self.tty_mode
-        self.update_ms = cli.update_ms if cli.update_ms is not None else cfg.get_int("update_ms")
+        self.update_ms = clamp_update_ms(cli.update_ms if cli.update_ms is not None else cfg.get_int("update_ms"))
+        self.cfg["update_ms"] = self.update_ms
         self.show_disks = cfg.get_bool("show_disks")
         self.io_mode = cfg.get_bool("io_mode")
         self.clock_text = ""
@@ -174,7 +179,7 @@ class App:
         self.help_page = 0
         self.options_sel = 0
         self.menu_sel = 0
-        self.confirm: tuple[str, int, str] | None = None
+        self.confirm: tuple[str, int, str, int] | None = None
         self.signal_buf: str | None = None
         self.values_snapshot = dict(cfg.values)
         self.proc_page_rows = 10
@@ -495,7 +500,7 @@ class App:
             self._toggle_collapse(key)
         elif key in ("+", "-"):
             step = 100 if key == "+" else -100
-            self.update_ms = max(MIN_UPDATE_MS, min(MAX_UPDATE_MS, self.update_ms + step))
+            self.update_ms = clamp_update_ms(self.update_ms + step)
             self.cfg["update_ms"] = self.update_ms
         elif key == "up":
             self._move_selection(-1)
@@ -580,7 +585,7 @@ class App:
             pos = choices.index(current) if current in choices else 0
             self.cfg[key] = choices[(pos + step) % len(choices)]
         elif kind == "int":
-            self.cfg[key] = max(MIN_UPDATE_MS, min(MAX_UPDATE_MS, current + step * 100))
+            self.cfg[key] = clamp_update_ms(current + step * 100)
             self.update_ms = self.cfg[key]
         self._refresh_settings()
 
@@ -620,15 +625,15 @@ class App:
         self._rebuild_process_list(self._all_procs)
 
     def _key_confirm(self, key: str) -> None:
-        action, pid, name = self.confirm  # type: ignore[misc]
+        action, pid, name, start_ticks = self.confirm  # type: ignore[misc]
         self.confirm = None
         if key != "y":
             return
         if action.startswith("signal:"):
             sig = int(action.split(":", 1)[1])
-            self._send_signal(pid, name, sig, f"signal {sig}")
+            self._send_signal(pid, start_ticks, name, sig, f"signal {sig}")
         else:
-            self._send_signal(pid, name, SIGNAL_NAMES[action], action)
+            self._send_signal(pid, start_ticks, name, SIGNAL_NAMES[action], action)
 
     def _key_signal_prompt(self, key: str) -> None:
         if key == "esc":
@@ -639,7 +644,7 @@ class App:
             if not (buf.isdigit() and 1 <= int(buf) <= 64):
                 self._flash("Invalid signal number")
             elif proc is not None:
-                self.confirm = (f"signal:{int(buf)}", proc.pid, proc.name)
+                self.confirm = (f"signal:{int(buf)}", proc.pid, proc.name, proc.start_ticks)
         elif key == "backspace":
             self.signal_buf = (self.signal_buf or "")[:-1]
         elif key.isdigit() and len(key) == 1:
@@ -648,13 +653,17 @@ class App:
     def _request_confirm(self, action: str) -> None:
         proc = self._selected_proc()
         if proc is not None:
-            self.confirm = (action, proc.pid, proc.name)
+            self.confirm = (action, proc.pid, proc.name, proc.start_ticks)
 
     def _selected_proc(self) -> proc_c.ProcessInfo | None:
         return self.procs[self.selected_index] if self.procs else None
 
-    def _send_signal(self, pid: int, name: str, sig: int, label: str) -> None:
+    def _send_signal(self, pid: int, start_ticks: int, name: str, sig: int, label: str) -> None:
+        # A reused PID has a different start time, so only signal the process that was confirmed.
         try:
+            if proc_c.read_start_ticks(pid) != start_ticks:
+                self._flash(f"No such process {pid}")
+                return
             os.kill(pid, sig)
             self._flash(f"Sent {label} to {name} ({pid})")
         except ProcessLookupError:
@@ -906,7 +915,7 @@ class App:
         elif self.overlay == "menu":
             ov.draw_menu(canvas, pal, self.menu_sel, ov.MENU_ITEMS, self._map_overlay)
         if self.confirm is not None:
-            action, pid, name = self.confirm
+            action, pid, name, _ = self.confirm
             verb = action.replace("signal:", "send signal ") if action.startswith("signal:") else action
             ov.draw_prompt(canvas, pal, "Confirm", [
                 f"{verb.capitalize()} to {name} (pid {pid})?  y = yes, any other key = no",

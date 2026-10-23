@@ -5,13 +5,17 @@ import itertools
 import pytest
 
 from pybtop import fmt
-from pybtop.app import App, CliOptions
+import os
+import signal
+
+from pybtop.app import MAX_UPDATE_MS, MIN_UPDATE_MS, App, CliOptions
 from pybtop.config import Config
 from pybtop.defaults import DEFAULTS
 from pybtop.keys import KeyDecoder, MouseEvent
 from pybtop.presets import PresetError, parse_preset_string, select_preset
 from pybtop.render import ansi
 from pybtop.theme import load_theme
+from pybtop.collectors import processes
 from pybtop.ui import layout
 from pybtop.textsafe import printable
 from pybtop.ui.pen import Pen, c_round, graph_rows
@@ -235,3 +239,21 @@ def test_braille_box_drawing_and_wide_glyphs_survive_sanitising():
     canvas = ansi.Canvas(20, 1)
     canvas.put(0, 0, glyphs)
     assert "".join(cell.char for cell in canvas.cells[0][: len(glyphs)]) == glyphs
+
+
+@pytest.mark.parametrize("current_start, sent", [(4242, True), (9999, False)])
+def test_signal_is_sent_only_while_the_pid_still_has_the_confirmed_start_time(tmp_path, monkeypatch, current_start, sent):
+    sent_signals = []
+    monkeypatch.setattr(processes, "read_start_ticks", lambda pid, *a: current_start)
+    monkeypatch.setattr(os, "kill", lambda pid, sig: sent_signals.append((pid, sig)))
+    app = App(Config(DEFAULTS), CliOptions(), str(tmp_path))
+    app._send_signal(1234, 4242, "job", signal.SIGTERM, "terminate")
+    assert bool(sent_signals) is sent
+    assert app.status == ("Sent terminate to job (1234)" if sent else "No such process 1234")
+
+
+@pytest.mark.parametrize("configured, expected", [(0, MIN_UPDATE_MS), (-5, MIN_UPDATE_MS), (10**12, MAX_UPDATE_MS)])
+def test_config_update_ms_is_clamped_to_the_cli_bounds(tmp_path, configured, expected):
+    app = App(Config(DEFAULTS, {"update_ms": configured}), CliOptions(), str(tmp_path))
+    assert app.update_ms == expected
+    assert app.cfg["update_ms"] == expected
