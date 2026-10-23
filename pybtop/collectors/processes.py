@@ -7,6 +7,8 @@ import pwd
 import time
 from dataclasses import dataclass, field
 
+from .cpu import read_uptime_seconds
+
 PROC = "/proc"
 PAGE_SIZE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
@@ -29,6 +31,7 @@ class ProcessInfo:
     kernel_thread: bool = False
     # Derived per refresh:
     cpu_percent: float = 0.0
+    cpu_cumulative: float = 0.0  # CPU ticks over lifetime ticks, btop's cpu_c (used by "cpu lazy")
     mem_percent: float = 0.0
     children: list[int] = field(default_factory=list)
 
@@ -115,6 +118,7 @@ class ProcessSampler:
 
     def sample(self, per_core: bool = False, now: float | None = None) -> list[ProcessInfo]:
         now = time.monotonic() if now is None else now
+        uptime = read_uptime_seconds()
         elapsed = (now - self._prev_time) if self._prev_time is not None else 0.0
         procs: list[ProcessInfo] = []
         for pid in list_pids():
@@ -129,6 +133,7 @@ class ProcessSampler:
             if prev is not None and elapsed > 0:
                 pct = 100.0 * (info.cpu_ticks - prev) / (elapsed * CLK_TCK)
                 info.cpu_percent = max(0.0, pct if per_core else pct / cores)
+            info.cpu_cumulative = info.cpu_ticks / max(1.0, uptime * CLK_TCK - info.start_ticks)
             info.mem_percent = 100.0 * info.rss_bytes / self.total_memory if self.total_memory else 0.0
         self._prev_ticks = ticks_now
         self._prev_time = now
@@ -136,6 +141,9 @@ class ProcessSampler:
 
 
 SORT_KEYS = ("pid", "program", "arguments", "threads", "user", "memory", "cpu lazy", "cpu direct")
+
+LAZY_THRESHOLD = 30.0  # btop's proc_sorter: processes above this % are pushed to the front
+LAZY_MAX_MOVES = 10
 
 
 _SORT_KEY_FUNCS = {
@@ -145,15 +153,43 @@ _SORT_KEY_FUNCS = {
     "threads": (lambda p: p.threads, True),
     "user": (lambda p: p.user.lower(), False),
     "memory": (lambda p: p.rss_bytes, True),
-    "cpu lazy": (lambda p: p.cpu_percent, True),
     "cpu direct": (lambda p: p.cpu_percent, True),
 }
 
 
 def sort_processes(procs: list[ProcessInfo], key: str, reverse: bool = False) -> list[ProcessInfo]:
     """Order processes by a sort key. Numeric keys default to descending; text and pid to ascending."""
-    func, descending = _SORT_KEY_FUNCS.get(key, _SORT_KEY_FUNCS["cpu lazy"])
+    if key not in _SORT_KEY_FUNCS:
+        key = "cpu lazy"
+    if key == "cpu lazy":
+        return _sort_cpu_lazy(procs, reverse)
+    func, descending = _SORT_KEY_FUNCS[key]
     return sorted(procs, key=func, reverse=descending != reverse)
+
+
+def _sort_cpu_lazy(procs: list[ProcessInfo], reverse: bool) -> list[ProcessInfo]:
+    """btop's "cpu lazy": order by lifetime CPU, then move busy processes forward (btop_shared.cpp proc_sorter).
+
+    The push only applies in the normal (not reversed) order. A process above the threshold is moved to the
+    first position after the leading busy processes, at most LAZY_MAX_MOVES times per refresh.
+    """
+    ordered = sorted(procs, key=lambda p: p.cpu_cumulative, reverse=not reverse)
+    if reverse:
+        return ordered
+    top_max, target, offset, moves = 10.0, 30.0, 0, 0
+    for i in range(len(ordered)):
+        if i <= 5 and ordered[i].cpu_percent > top_max:
+            top_max = ordered[i].cpu_percent
+        elif i == 6:
+            target = top_max if top_max > LAZY_THRESHOLD else 10.0
+        if i == offset and ordered[i].cpu_percent > LAZY_THRESHOLD:
+            offset += 1
+        elif ordered[i].cpu_percent > target:
+            ordered.insert(offset, ordered.pop(i))
+            moves += 1
+            if moves > LAZY_MAX_MOVES:
+                break
+    return ordered
 
 
 def filter_processes(procs: list[ProcessInfo], text: str, hide_kernel: bool = False) -> list[ProcessInfo]:

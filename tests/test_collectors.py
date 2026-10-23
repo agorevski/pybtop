@@ -68,9 +68,27 @@ def test_sort_defaults_are_descending_for_numbers_and_ascending_for_names():
                               start_ticks=0, rss_bytes=30, cpu_percent=9.0),
     ]
     assert [p.pid for p in processes.sort_processes(procs, "pid")] == [1, 3]
-    assert [p.pid for p in processes.sort_processes(procs, "cpu lazy")] == [1, 3]
     assert [p.pid for p in processes.sort_processes(procs, "memory")] == [1, 3]
     assert [p.pid for p in processes.sort_processes(procs, "memory", reverse=True)] == [3, 1]
+
+
+def _proc(pid: int, cpu: float = 0.0, cumulative: float = 0.0) -> processes.ProcessInfo:
+    info = processes.ProcessInfo(pid=pid, ppid=1, name=f"p{pid}", state="S", threads=1, utime=0, stime=0,
+                                 start_ticks=0, rss_bytes=0, cpu_percent=cpu)
+    info.cpu_cumulative = cumulative
+    return info
+
+
+def test_cpu_lazy_orders_by_lifetime_cpu_while_cpu_direct_uses_current_cpu():
+    procs = [_proc(1, cpu=8.0, cumulative=0.1), _proc(2, cpu=0.0, cumulative=0.9)]
+    assert [p.pid for p in processes.sort_processes(procs, "cpu lazy")] == [2, 1]
+    assert [p.pid for p in processes.sort_processes(procs, "cpu direct")] == [1, 2]
+
+
+def test_cpu_lazy_pushes_busy_process_above_long_lived_ones():
+    idle = [_proc(pid, cumulative=1.0 - pid * 0.01) for pid in range(1, 8)]
+    busy = _proc(99, cpu=50.0, cumulative=0.01)
+    assert processes.sort_processes(idle + [busy], "cpu lazy")[0].pid == 99
 
 
 def test_tree_order_nests_children_under_parents():

@@ -1,5 +1,7 @@
 """Rendering helpers, formatting, presets, key decoding and layout invariants."""
 
+import itertools
+
 import pytest
 
 from pybtop import fmt
@@ -111,3 +113,36 @@ def test_layout_matches_btop_120x40_rows_with_four_gpus():
     assert (rects["mem"].row, rects["mem"].height) == (17, 11)
     assert (rects["net"].row, rects["net"].height) == (28, 12)
     assert (rects["proc"].col, rects["proc"].width) == (54, 66)
+
+
+def test_layout_covers_the_screen_for_every_box_subset_and_position_option():
+    boxes = ("cpu", "mem", "net", "proc")
+    options = [(bottom, left, below) for bottom in (False, True) for left in (False, True) for below in (False, True)]
+    for width, height in [(80, 24), (120, 40), (160, 50)]:
+        for count in range(1, 5):
+            for subset in itertools.combinations(boxes, count):
+                for cpu_bottom, proc_left, mem_below_net in options:
+                    rects = layout.compute(width, height, 4, subset, cpu_bottom, proc_left, mem_below_net)
+                    assert set(rects) == set(subset)
+                    covered = set()
+                    for rect in rects.values():
+                        for r in range(rect.row, rect.row + rect.height):
+                            for c in range(rect.col, rect.col + rect.width):
+                                assert (r, c) not in covered, f"overlap {subset} {width}x{height}"
+                                covered.add((r, c))
+                    assert len(covered) == width * height, f"gap {subset} {width}x{height}"
+
+
+def test_position_options_move_boxes_like_btop_calc_sizes_at_120x40():
+    rects = layout.compute(120, 40, gpu_count=4, cpu_bottom=True, proc_left=True, mem_below_net=True)
+    assert (rects["cpu"].row, rects["cpu"].height) == (23, 17)
+    assert (rects["net"].row, rects["net"].col, rects["net"].height, rects["net"].width) == (0, 66, 12, 54)
+    assert (rects["mem"].row, rects["mem"].col, rects["mem"].height, rects["mem"].width) == (12, 66, 11, 54)
+    assert (rects["proc"].row, rects["proc"].col, rects["proc"].height, rects["proc"].width) == (0, 0, 23, 66)
+
+
+def test_hiding_mem_gives_net_the_whole_left_column_and_hiding_proc_widens_it():
+    rects = layout.compute(120, 40, gpu_count=4, shown={"cpu", "net", "proc"})
+    assert (rects["net"].row, rects["net"].height, rects["net"].width) == (17, 23, 54)
+    rects = layout.compute(120, 40, gpu_count=4, shown={"cpu", "net"})
+    assert (rects["net"].row, rects["net"].height, rects["net"].width) == (17, 23, 120)

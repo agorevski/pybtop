@@ -11,7 +11,23 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..fmt import floating_humanizer
-from .pen import DIV_LEFT, DIV_RIGHT, GRAPH_BG, H_LINE, V_LINE, Pen, c_round, create_box, graph, meter, rjust
+from .pen import (
+    DIV_LEFT,
+    DIV_RIGHT,
+    GRAPH_BG,
+    H_LINE,
+    TITLE_LEFT,
+    TITLE_LEFT_DOWN,
+    TITLE_RIGHT,
+    TITLE_RIGHT_DOWN,
+    V_LINE,
+    Pen,
+    c_round,
+    create_box,
+    graph,
+    meter,
+    rjust,
+)
 
 if TYPE_CHECKING:
     from ..app import App
@@ -44,7 +60,7 @@ def show_temps(app: "App") -> bool:
     return app.cfg.get_bool("check_temp") and app.cpu_temp is not None
 
 
-def cpu_geometry(app: "App", width: int, cpu_h: int) -> CpuGeo:
+def cpu_geometry(app: "App", width: int, cpu_h: int, y: int) -> CpuGeo:
     """Draw::calcSizes CPU branch: sub-box columns, sizes, and graph heights."""
     cores = len(app.core_pcts)
     gpus = len(app.gpus)
@@ -63,7 +79,7 @@ def cpu_geometry(app: "App", width: int, cpu_h: int) -> CpuGeo:
         b_columns = max(1, (width_c - third) // (8 + 6 * t))
         size, b_width = 0, (8 + 6 * t) * b_columns + 1
     b_height = min(cpu_h - 2, math.ceil(cores / b_columns) + 4 + gpus_extra)
-    x, y = 1, 1
+    x = 1
     b_x = x + width_c - b_width - 1
     b_y = y + math.ceil((cpu_h - 2) / 2) - math.ceil(b_height / 2) + 1
 
@@ -79,12 +95,13 @@ def cpu_geometry(app: "App", width: int, cpu_h: int) -> CpuGeo:
     )
 
 
-def draw_cpu(app: "App", pen: Pen, width: int, cpu_h: int) -> CpuGeo:
+def draw_cpu(app: "App", pen: Pen, width: int, cpu_h: int, y: int) -> CpuGeo:
     pal = app.palette
-    geo = cpu_geometry(app, width, cpu_h)
+    geo = cpu_geometry(app, width, cpu_h, y)
     x, y, w, h = geo.x, geo.y, geo.width, geo.height
     box = pal.box("cpu")
-    create_box(pen, x, y, w, h, box, True, "cpu", "", 1,
+    title, title2 = ("", "cpu") if app.cpu_bottom else ("cpu", "")
+    create_box(pen, x, y, w, h, box, True, title, title2, 1,
                rounded=app.cfg.get_bool("rounded_corners"), title_color=pal.title, hi_color=pal.hi_fg, bg=pal.bg)
     _header_buttons(app, pen, geo)
     _draw_meter_box(app, pen, geo)
@@ -123,30 +140,32 @@ def draw_cpu(app: "App", pen: Pen, width: int, cpu_h: int) -> CpuGeo:
 
 def _header_buttons(app: "App", pen: Pen, geo: CpuGeo) -> None:
     pal = app.palette
-    x, y, w = geo.x, geo.y, geo.width
+    x, w = geo.x, geo.width
+    y = geo.y + geo.height - 1 if app.cpu_bottom else geo.y
+    left, right = (TITLE_LEFT_DOWN, TITLE_RIGHT_DOWN) if app.cpu_bottom else (TITLE_LEFT, TITLE_RIGHT)
     box = pal.box("cpu")
     pen.to(y, x + 10)
-    pen.write("┐", fg=box)
+    pen.write(left, fg=box)
     pen.write("m", fg=pal.hi_fg, bold=True)
     pen.write("enu", fg=pal.title, bold=False)
-    pen.write("┌", fg=box)
+    pen.write(right, fg=box)
     pen.to(y, x + 16)
-    pen.write("┐", fg=box)
+    pen.write(left, fg=box)
     pen.write("p", fg=pal.hi_fg, bold=True)
     pen.write("reset ", fg=pal.title, bold=False)
     pen.write(app.preset_label, fg=pal.title)
-    pen.write("┌", fg=box)
+    pen.write(right, fg=box)
     update = f"{app.update_ms}ms"
     pen.to(y, x + w - len(update) - 8)
-    pen.write("┐", fg=box)
+    pen.write(left, fg=box)
     pen.write("- ", fg=pal.hi_fg, bold=True)
     pen.write(update, fg=pal.title)
     pen.write(" +", fg=pal.hi_fg)
-    pen.write("┌", fg=box)
+    pen.write(right, fg=box)
     pen.to(y, x + w // 2 - 4)
-    pen.write("┐", fg=box)
+    pen.write(left, fg=box)
     pen.write(app.clock_text, fg=pal.title, bold=True)
-    pen.write("┌", fg=box)
+    pen.write(right, fg=box)
 
 
 def _uptime_string(app: "App") -> str:

@@ -57,9 +57,8 @@ class MemGeo:
     disk_meter: int
 
 
-def mem_geometry(app: "App", width: int, height: int, y: int) -> MemGeo:
+def mem_geometry(app: "App", width: int, height: int, y: int, x: int) -> MemGeo:
     """Mem branch of calcSizes (L2149-2177), default config (swap_disk, mem_graphs, show_disks)."""
-    x = 1
     if app.show_disks:
         mem_w = math.ceil((width - 3) / 2)
         mem_w += mem_w % 2
@@ -87,9 +86,9 @@ def mem_geometry(app: "App", width: int, height: int, y: int) -> MemGeo:
     return MemGeo(x, y, width, height, mem_w, disks_w, divider, mem_size, mem_meter, graph_h, disk_meter)
 
 
-def draw_mem(app: "App", pen: Pen, width: int, height: int, y: int) -> None:
+def draw_mem(app: "App", pen: Pen, width: int, height: int, y: int, x: int) -> None:
     pal = app.palette
-    g = mem_geometry(app, width, height, y)
+    g = mem_geometry(app, width, height, y, x)
     x = g.x
     box = pal.box("mem")
     create_box(pen, x, y, width, height, box, True, "mem", "", 2,
@@ -177,10 +176,10 @@ def _mem_stats(app: "App", pen: Pen, g: MemGeo) -> None:
 def _separator(app: "App", pen: Pen, g: MemGeo, row: int) -> None:
     """Horizontal '├───┤' divider across the MEM column (Mem::draw L1218-1219, L1262-1263).
 
-    btop writes it from the column just left of the box border, so the cursor ends where the title starts.
+    btop moves to x+2 (the first label column) and steps two cells left onto the box border.
     """
     pal = app.palette
-    pen.to(row, g.x + 1)
+    pen.to(row, g.x + 2)
     pen.l(2)
     pen.write(DIV_LEFT, fg=pal.box("mem"))
     pen.write(H_LINE * (g.mem_w - 1), fg=pal.div_line)
@@ -275,10 +274,9 @@ def _disks(app: "App", pen: Pen, g: MemGeo) -> None:
 # ---------- NET -------------------------------------------------------------------------------
 
 
-def draw_net(app: "App", pen: Pen, width: int, height: int, y: int) -> None:
+def draw_net(app: "App", pen: Pen, width: int, height: int, y: int, x: int) -> None:
     pal = app.palette
     box = pal.box("net")
-    x = 1
     b_width = 27 if width > 45 else 19
     b_height = 9 if height > 10 else height - 2
     b_x = x + width - b_width - 1

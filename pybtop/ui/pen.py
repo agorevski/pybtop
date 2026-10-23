@@ -170,6 +170,8 @@ def create_box(
     if title2:
         pen.to(y + height - 1, x + 2)
         pen.write(TITLE_LEFT_DOWN, fg=line_color)
+        if hi_color is not None and numbering:
+            pen.write(numbering, fg=hi_color, bold=True)
         pen.write(title2, fg=title_color or line_color, bold=True)
         pen.write(TITLE_RIGHT_DOWN, fg=line_color, bold=False)
 
