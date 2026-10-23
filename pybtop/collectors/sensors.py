@@ -1,4 +1,4 @@
-"""Temperatures from hwmon, battery state from power_supply, and GPUs via NVML."""
+"""Temperatures from hwmon and GPUs via NVML."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import os
 from dataclasses import dataclass, field
 
 HWMON_DIR = "/sys/class/hwmon"
-POWER_SUPPLY_DIR = "/sys/class/power_supply"
 
 
 @dataclass
@@ -100,31 +99,6 @@ def read_core_ids(path: str = "/proc/cpuinfo") -> dict[int, int]:
     except (OSError, ValueError):
         pass
     return mapping
-
-
-@dataclass
-class BatteryState:
-    name: str
-    percent: float
-    status: str  # Charging / Discharging / Full / Not charging / Unknown
-    power_watts: float | None
-
-
-def read_batteries(root: str = POWER_SUPPLY_DIR) -> list[BatteryState]:
-    batteries: list[BatteryState] = []
-    for supply in sorted(glob.glob(os.path.join(root, "BAT*"))):
-        capacity = _read_text(os.path.join(supply, "capacity"))
-        if capacity is None:
-            continue
-        try:
-            percent = float(capacity)
-        except ValueError:
-            continue
-        status = _read_text(os.path.join(supply, "status")) or "Unknown"
-        power = _read_text(os.path.join(supply, "power_now"))
-        watts = int(power) / 1e6 if power and power.lstrip("-").isdigit() else None
-        batteries.append(BatteryState(os.path.basename(supply), percent, status, watts))
-    return batteries
 
 
 # NVML binding (libnvidia-ml), loaded lazily like btop does with dlopen.

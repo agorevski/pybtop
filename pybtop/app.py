@@ -13,6 +13,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from . import config as config_mod
 from . import log
+from .collectors import battery as bat_c
 from .collectors import cpu as cpu_c
 from .collectors import memory as mem_c
 from .collectors import network as net_c
@@ -107,6 +108,7 @@ class App:
         self.core_temps: dict[int, float] = {}
         self.freqs: list[float] = []
         self.uptime_text = ""
+        self.battery: bat_c.BatteryInfo | None = None
         self.loadavg = (0.0, 0.0, 0.0)
         self.mem: mem_c.MemoryStats | None = None
         self.mem_hist: dict[str, deque[float]] = {k: deque(maxlen=HISTORY) for k in ("used", "available", "cached", "free")}
@@ -253,13 +255,17 @@ class App:
         self.core_temps = sens_c.core_temps(chips)
         self.cpu_temp_hist.append(self.cpu_temp or 0.0)
 
-        self.mem = mem_c.read_memory()
+        self.battery = (
+            bat_c.read_battery(self.cfg.get_str("selected_battery")) if self.cfg.get_bool("show_battery") else None
+        )
+
+        self.mem = mem_c.read_memory(arcstats_path=mem_c.PROC_ARCSTATS if self.cfg.get_bool("zfs_arc_cached") else None)
         total = self.mem.total or 1
         self.mem_hist["used"].append(100.0 * self.mem.used / total)
         self.mem_hist["available"].append(100.0 * self.mem.available / total)
         self.mem_hist["cached"].append(100.0 * self.mem.cached / total)
         self.mem_hist["free"].append(100.0 * self.mem.free / total)
-        self.disks = mem_c.list_disks(self.cfg.get_bool("only_physical"))
+        self.disks = mem_c.list_disks(self.cfg.get_bool("only_physical"), self.cfg.get_bool("zfs_hide_datasets"))
         self._sample_disk_io(now)
 
         rate = self.net_monitor.sample(now)
