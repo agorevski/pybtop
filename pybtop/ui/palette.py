@@ -53,5 +53,5 @@ class Palette:
     def box(self, name: str) -> Color:
         return self.box_colors.get(name, self.main_fg)
 
-    def gradient_color(self, name: str, percent: float) -> tuple[int, int, int]:
+    def gradient_color(self, name: str, percent: float) -> Color:
         return gradient_color(self.gradients[name], percent)

@@ -28,7 +28,19 @@ def move(row: int, col: int) -> str:
     return f"\x1b[{row};{col}H"
 
 
-Color = tuple[int, int, int] | None  # None means terminal default
+@dataclass(frozen=True)
+class Ansi16:
+    """A basic terminal colour: 0-7 normal, 8-15 bright. Emitted as an SGR code, never as RGB."""
+
+    index: int
+
+
+Color = tuple[int, int, int] | Ansi16 | None  # None means terminal default
+
+
+def ansi16_sequence(color: Ansi16, background: bool) -> str:
+    base = (40 if background else 30) if color.index < 8 else (100 if background else 90)
+    return f"\x1b[{base + color.index % 8}m"
 
 
 def parse_color(text: str) -> Color:
@@ -56,10 +68,17 @@ def lerp_color(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tu
     return tuple(round(x + (y - x) * t) for x, y in zip(a, b))  # type: ignore[return-value]
 
 
-def gradient_color(stops: list[tuple[int, int, int]], percent: float) -> tuple[int, int, int]:
+def gradient_color(stops: list[Color], percent: float) -> Color:
     """Map 0..100 onto a list of color stops (2 stops: start..end; 3 stops: start..mid..end)."""
     if len(stops) == 1:
         return stops[0]
+    if isinstance(stops[0], Ansi16):
+        # btop's TTY theme has no gradient interpolation: it switches stops at 50 (two stops)
+        # or at 33 and 66 (three stops), using the integer percent.
+        p = int(max(0.0, min(100.0, percent)) + 0.5)
+        if len(stops) == 2:
+            return stops[0] if p <= 50 else stops[1]
+        return stops[0] if p <= 33 else stops[1] if p <= 66 else stops[2]
     t = max(0.0, min(100.0, percent)) / 100.0
     if len(stops) == 2:
         return lerp_color(stops[0], stops[1], t)
@@ -134,7 +153,15 @@ def _style_sequence(cell: Cell, low_color: bool = False) -> str:
     if cell.bold:
         parts.append("\x1b[1m")
     if cell.fg is not None:
-        parts.append(fg_256(rgb_to_256(cell.fg)) if low_color else fg_rgb(*cell.fg))
+        parts.append(_color_sequence(cell.fg, False, low_color))
     if cell.bg is not None:
-        parts.append(bg_256(rgb_to_256(cell.bg)) if low_color else bg_rgb(*cell.bg))
+        parts.append(_color_sequence(cell.bg, True, low_color))
     return "".join(parts)
+
+
+def _color_sequence(color: Color, background: bool, low_color: bool) -> str:
+    if isinstance(color, Ansi16):
+        return ansi16_sequence(color, background)
+    if background:
+        return bg_256(rgb_to_256(color)) if low_color else bg_rgb(*color)
+    return fg_256(rgb_to_256(color)) if low_color else fg_rgb(*color)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 
-from .render.ansi import Color, parse_color
+from .render.ansi import Ansi16, Color, parse_color
 
 SYSTEM_THEME_DIR = "/usr/share/btop/themes"
 THEME_LINE = re.compile(r'^\s*theme\[([a-z_0-9]+)\]\s*=\s*(?:"([^"]*)"|(\S+))')
@@ -64,16 +64,39 @@ DEFAULT_THEME: dict[str, str] = {
 }
 
 
-class Theme:
-    """Resolved colors. Each key maps to a Color (RGB tuple or None for terminal default)."""
+# btop 1.3.0 TTY_theme (src/btop_theme.cpp): fixed 16-colour SGR codes, used whenever the TTY
+# theme is selected or tty mode is on, regardless of colour depth. Empty gradient stops are None.
+TTY_THEME: dict[str, Color] = {
+    "main_bg": Ansi16(0), "main_fg": Ansi16(7), "title": Ansi16(15), "hi_fg": Ansi16(9),
+    "selected_bg": Ansi16(1), "selected_fg": Ansi16(15), "inactive_fg": Ansi16(8),
+    "graph_text": Ansi16(8), "meter_bg": Ansi16(8), "proc_misc": Ansi16(10),
+    "cpu_box": Ansi16(2), "mem_box": Ansi16(3), "net_box": Ansi16(5), "proc_box": Ansi16(1),
+    "div_line": Ansi16(8),
+    "temp_start": Ansi16(12), "temp_mid": Ansi16(14), "temp_end": Ansi16(13),
+    "cpu_start": Ansi16(10), "cpu_mid": Ansi16(11), "cpu_end": Ansi16(9),
+    "free_start": Ansi16(2), "free_mid": None, "free_end": Ansi16(10),
+    "cached_start": Ansi16(6), "cached_mid": None, "cached_end": Ansi16(14),
+    "available_start": Ansi16(3), "available_mid": None, "available_end": Ansi16(11),
+    "used_start": Ansi16(1), "used_mid": None, "used_end": Ansi16(9),
+    "download_start": Ansi16(4), "download_mid": None, "download_end": Ansi16(12),
+    "upload_start": Ansi16(5), "upload_mid": None, "upload_end": Ansi16(13),
+    "process_start": Ansi16(2), "process_mid": Ansi16(3), "process_end": Ansi16(1),
+}
 
-    def __init__(self, raw: dict[str, str]) -> None:
+
+class Theme:
+    """Resolved colors. Each key maps to a Color (RGB tuple, Ansi16, or None for terminal default)."""
+
+    def __init__(self, raw: dict[str, str], tty: bool = False) -> None:
         self.raw = raw
+        self.tty = tty
 
     def color(self, key: str) -> Color:
+        if self.tty:
+            return TTY_THEME.get(key)
         return parse_color(self.raw.get(key, DEFAULT_THEME.get(key, "")))
 
-    def gradient(self, prefix: str) -> list[tuple[int, int, int]]:
+    def gradient(self, prefix: str) -> list[Color]:
         """Stops for a gradient, e.g. 'cpu' -> [start, mid, end] with empties dropped."""
         stops = []
         for suffix in ("start", "mid", "end"):
@@ -102,11 +125,16 @@ def find_theme_file(name: str, user_dir: str, system_dir: str = SYSTEM_THEME_DIR
     return None
 
 
+def tty_theme() -> Theme:
+    """btop's built-in TTY theme. Used for the name 'TTY' and whenever tty mode is on."""
+    return Theme({}, tty=True)
+
+
 def load_theme(name: str, user_dir: str, system_dir: str = SYSTEM_THEME_DIR) -> Theme:
     if name in ("", "Default"):
         return Theme({})
     if name == "TTY":
-        return Theme({})
+        return tty_theme()
     path = find_theme_file(name, user_dir, system_dir)
     if path is None:
         return Theme({})

@@ -52,6 +52,7 @@ The user's own `~/.config/btop/` was never written to. Every observation run use
 - Theme lookup: built-in `Default` and `TTY` names first, then the user theme directory (`$XDG_CONFIG_HOME/btop/themes`, or `~/.config/...` when unset), then system directories. A user file overrides a system file of the same name.
 - Theme values are `#RRGGBB`, `#BW` (grey), or a decimal `R G B` triple. Empty means the terminal default. Only the first quoted value is used; keys are case-sensitive; duplicates use the last value.
 - The built-in `Default` palette is verified cell by cell for most keys (see `pybtop/theme.py`). Keys that were not visible in any capture come from the binary's literal table.
+- The built-in `TTY` theme is a table of fixed 16-colour SGR codes (`\x1b[37m`, `\x1b[41m`, ...), not hex. It is used for the `TTY` name and whenever tty mode is on, and ignores `-lc`. The table matches btop 1.3.0's `TTY_theme` in `src/btop_theme.cpp`; the binary carries the same strings.
 
 ## Presets
 

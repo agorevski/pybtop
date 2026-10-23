@@ -22,7 +22,7 @@ from .fmt import floating_humanizer
 from .keys import KeyDecoder
 from .presets import Preset, PresetError, parse_preset_string, select_preset
 from .render.ansi import Canvas
-from .theme import Theme, available_themes, load_theme
+from .theme import Theme, available_themes, load_theme, tty_theme
 from .ui import layout
 from .ui import overlays as ov
 from .ui import btop_boxes, btop_cpu
@@ -157,7 +157,12 @@ class App:
     def _load_theme(self) -> None:
         name = self.cfg.get_str("color_theme")
         self.theme: Theme = load_theme(name, self.user_theme_dir)
-        self.palette = Palette.from_theme(self.theme, self.cfg.get_bool("theme_background"))
+        self._build_palette()
+
+    def _build_palette(self) -> None:
+        # btop uses its TTY theme whenever tty mode is on, whatever color_theme says.
+        theme = tty_theme() if self.tty_mode else self.theme
+        self.palette = Palette.from_theme(theme, self.cfg.get_bool("theme_background"))
 
     def visible_gpus(self) -> list[sens_c.GpuInfo]:
         if self.cfg.get_str("show_gpu_info") == "Off":
@@ -533,7 +538,7 @@ class App:
         """Recompute values derived from config: colour depth, tty mode and palette."""
         self.tty_mode = self.cli.tty if self.cli.tty is not None else self.cfg.get_bool("force_tty")
         self.low_color = self.cli.low_color or not self.cfg.get_bool("truecolor") or self.tty_mode
-        self.palette = Palette.from_theme(self.theme, self.cfg.get_bool("theme_background"))
+        self._build_palette()
 
     def _key_menu(self, key: str) -> None:
         items = ov.MENU_ITEMS

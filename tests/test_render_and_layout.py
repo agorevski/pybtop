@@ -6,6 +6,7 @@ from pybtop import fmt
 from pybtop.keys import KeyDecoder
 from pybtop.presets import PresetError, parse_preset_string, select_preset
 from pybtop.render import ansi
+from pybtop.theme import load_theme
 from pybtop.ui import layout
 from pybtop.ui.pen import c_round, graph_rows
 
@@ -45,6 +46,26 @@ def test_parse_color_accepts_hex_grey_and_decimal_triples():
     assert ansi.parse_color("#40") == (64, 64, 64)
     assert ansi.parse_color("0 128 255") == (0, 128, 255)
     assert ansi.parse_color("") is None
+
+
+def test_tty_theme_renders_btop_sgr_codes_at_any_colour_depth():
+    tty = load_theme("TTY", "")
+    assert tty.color("main_fg") == ansi.Ansi16(7)
+    assert tty.color("title") == ansi.Ansi16(15)
+    canvas = ansi.Canvas(1, 1)
+    canvas.put(0, 0, "x", fg=tty.color("hi_fg"), bg=tty.color("selected_bg"))
+    assert "\x1b[91m" in canvas.render(low_color=True)
+    assert "\x1b[41m" in canvas.render(low_color=False)
+
+
+def test_tty_gradients_switch_stops_at_btop_thresholds():
+    three = [ansi.Ansi16(2), ansi.Ansi16(3), ansi.Ansi16(1)]
+    assert ansi.gradient_color(three, 33) == ansi.Ansi16(2)
+    assert ansi.gradient_color(three, 34) == ansi.Ansi16(3)
+    assert ansi.gradient_color(three, 67) == ansi.Ansi16(1)
+    two = [ansi.Ansi16(10), ansi.Ansi16(9)]
+    assert ansi.gradient_color(two, 50) == ansi.Ansi16(10)
+    assert ansi.gradient_color(two, 51) == ansi.Ansi16(9)
 
 
 @pytest.mark.parametrize(
