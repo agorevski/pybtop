@@ -1,7 +1,7 @@
 # Security Review: pybtop
 
 Scope: entire tracked codebase (no staged or unstaged changes at review time).
-Status: findings and suggested fixes only. No code has been changed.
+Status: all findings are fixed on `main`. Each fix is listed under Remediation below.
 
 ## Findings
 
@@ -59,3 +59,13 @@ Apply the same filter in `Pen.write` so every rendered string is covered: interf
 - `/proc` and `/sys` reads use fixed paths and attacker-independent writes.
 - NVML ctypes calls load fixed library names.
 - No hardcoded secrets or credentials in tracked files.
+
+## Remediation
+
+| # | Item | Fix | Where |
+|---|------|-----|-------|
+| 1 | Terminal escape injection (finding 1) | `printable()` replaces control and format characters in `Canvas.put`, `Pen.write`, and at the `/proc` readers. pybtop's own SGR sequences are not affected. | `pybtop/textsafe.py`, `pybtop/render/ansi.py`, `pybtop/ui/pen.py`, `pybtop/collectors/processes.py` |
+| 2 | PID reuse before kill (hardening 2) | The process start time is recorded when the confirmation opens and re-read before `os.kill`; a mismatch reports "No such process". `os.pidfd_open` is missing from the Python used here, so a small race remains between the check and the kill. | `pybtop/app.py`, `pybtop/collectors/processes.py` |
+| 3 | Theme name used as a path (hardening 3) | Names containing `/`, `\`, NUL, or `..` are rejected; the Default theme is used instead. | `pybtop/theme.py` |
+| 4 | Config write permissions (hardening 4) | New config directories are created with mode 0700 and files with 0600. Writes go through a temp file and `os.replace`, follow symlinks, and keep an existing file's mode. | `pybtop/config.py` |
+| 5 | Unclamped `update_ms` (hardening 5) | Config values are clamped with the CLI bounds through `clamp_update_ms`. | `pybtop/app.py` |
